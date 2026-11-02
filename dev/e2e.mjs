@@ -59,7 +59,7 @@ async function connect() {
             pending.delete(msg.id);
             if (msg.error) p.rej(new Error(`${p.method}: ${msg.error.message}`)); else p.res(msg.result);
           } else if (msg.method === 'Page.javascriptDialogOpening') {
-            send('Page.handleJavaScriptDialog', { accept: true });
+            send('Page.handleJavaScriptDialog', { accept: true, promptText: 'כותרת בדיקה' });
           } else if (msg.method === 'Runtime.exceptionThrown') {
             problems.push(msg.params.exceptionDetails.exception?.description || msg.params.exceptionDetails.text);
           } else if (msg.method === 'Log.entryAdded' && msg.params.entry.level === 'error') {
@@ -231,7 +231,7 @@ try {
 
   await step('what-if changes are not saved and can be cancelled', async () => {
     const commits = (await mockState()).commits.length;
-    await clickButton('מה אם?');
+    await clickButton('בדיקת "מה אם"');
     const before = await rowText(movable.id);
     await evaluate(`document.querySelector('.drawer .icon-btn').click()`);
     const r = await barRect(movable.id);
@@ -243,6 +243,25 @@ try {
     assert.equal(await rowText(movable.id), before);
     await sleep(100);
     assert.equal((await mockState()).commits.length, commits);
+  });
+
+  await step('every name is written on the chart and in the table, without hovering', async () => {
+    const chart = await evaluate(`[...document.querySelectorAll('.body-svg text')].map(t=>t.textContent).join('|')`);
+    const table = await evaluate(`document.querySelector('.tbody').innerText`);
+    const doc = (await mockState()).doc;
+    for (const t of doc.tasks) {
+      assert.ok(chart.includes(t.name), `chart should show ${t.name}`);
+      assert.ok(table.includes(t.name), `table should show ${t.name}`);
+    }
+    for (const p of doc.phases) assert.ok(chart.includes(p.name), `chart should show ${p.name}`);
+    assert.match(table, /לא התחיל/);
+  });
+
+  await step('a heading can be added by name', async () => {
+    await clickButton('+ כותרת');
+    await sleep(150);
+    assert.match(await evaluate(`document.querySelector('.tbody').innerText`), /כותרת בדיקה/);
+    await clickButton('ביטול');
   });
 
   await step('adding a task puts it in the plan', async () => {

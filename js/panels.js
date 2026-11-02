@@ -50,7 +50,7 @@ function closeDrawer() {
 function drawerHead(title) {
   return h('div', { class: 'drawer-head' },
     h('h2', { class: 'grow' }, title),
-    h('button', { class: 'icon-btn', 'aria-label': 'סגירה', onclick: closeDrawer }, '✕'));
+    h('button', { class: 'icon-btn', onclick: closeDrawer }, 'סגירה'));
 }
 
 function explainTiming(t, r) {
@@ -92,9 +92,9 @@ function renderDeps(t) {
             onchange: (e) => update(t.id, (x) => { x.deps.find((y) => y.id === d.id).lag = Number(e.target.value) || 0; }),
           })),
         h('button', {
-          class: 'icon-btn', 'aria-label': 'הסרת התלות',
+          class: 'icon-btn',
           onclick: () => update(t.id, (x) => { x.deps = x.deps.filter((y) => y.id !== d.id); }),
-        }, '✕'));
+        }, 'הסרה'));
     }),
     h('select', {
       'aria-label': 'הוספת תלות',
@@ -129,12 +129,12 @@ function renderCriteria(t) {
         }),
         h('span', {}, c)),
       h('button', {
-        class: 'icon-btn', 'aria-label': 'הסרת התנאי',
+        class: 'icon-btn',
         onclick: () => update(t.id, (x) => {
           x.criteria.splice(i, 1);
           x.criteriaDone = (x.criteriaDone || []).filter((n) => n !== i).map((n) => (n > i ? n - 1 : n));
         }),
-      }, '✕'))),
+      }, 'הסרה'))),
     h('input', {
       type: 'text', placeholder: '+ תנאי חדש, ואז Enter',
       onkeydown: (e) => {
@@ -197,7 +197,7 @@ export function renderTaskDrawer() {
         if (v === 'task') delete x.fixed;
       }))),
       field('מסלול', select('track', TRACKS, t.track || 'hw', (v) => update(t.id, (x) => { x.track = v; }))),
-      field('שלב', select('phase', state.doc.phases.map((p) => [p.id, p.name]), t.phase, (v) => update(t.id, (x) => { x.phase = v; }))),
+      field('כותרת', select('phase', state.doc.phases.map((p) => [p.id, p.name]), t.phase, (v) => update(t.id, (x) => { x.phase = v; }))),
       milestone
         ? field('תאריך קבוע', dateInput('fixed', t.fixed, (v) => update(t.id, (x) => { if (v) x.fixed = v; else delete x.fixed; })))
         : field('משך (ימי עבודה)', h('input', {
@@ -225,7 +225,7 @@ export function renderTaskDrawer() {
             class: 'label', target: '_blank', rel: 'noopener noreferrer',
             href: `https://github.com/Interactive-Driver-Dashboard-EE/Interactive-Driver-Dashboard-Display/issues/${Number(t.issue)}`,
           }, `Issue מספר ${Number(t.issue)}${issue ? (issue.state === 'closed' ? ' (סגור)' : ' (פתוח)') : ''}`),
-          h('button', { class: 'icon-btn', 'aria-label': 'ניתוק הקישור', onclick: () => update(t.id, (x) => { delete x.issue; }) }, '✕'))
+          h('button', { class: 'icon-btn', onclick: () => update(t.id, (x) => { delete x.issue; }) }, 'ניתוק'))
         : h('div', { class: 'actions' },
           h('button', { class: 'btn', onclick: () => createIssueFor(t) }, 'פתיחת Issue למשימה'),
           h('input', {
@@ -279,20 +279,20 @@ export function renderSettings() {
     h('p', { class: 'hint' }, 'צילום של התוכנית הנוכחית, כדי לראות בהמשך כמה כל משימה זזה ממנה. כדאי לצלם אחרי שאתם מסכימים על הלו"ז.'),
     (doc.baselines || []).map((b) => h('div', { class: 'dep-row' },
       h('span', { class: 'label' }, `${b.name} (${b.date})`),
-      h('button', { class: 'icon-btn', 'aria-label': 'מחיקת קו הבסיס', onclick: () => updateDoc((d) => { d.baselines = d.baselines.filter((x) => x.id !== b.id); }) }, '✕'))),
+      h('button', { class: 'icon-btn', onclick: () => updateDoc((d) => { d.baselines = d.baselines.filter((x) => x.id !== b.id); }) }, 'מחיקה'))),
     h('button', { class: 'btn', onclick: () => takeNewBaseline(`תוכנית ${fmt(toDay(todayIso()))}`) }, 'צילום קו בסיס עכשיו'),
 
-    h('h3', {}, 'שלבים'),
+    h('h3', {}, 'כותרות'),
     doc.phases.map((p, i) => h('div', { class: 'dep-row' },
       h('input', {
-        class: 'grow', type: 'text', value: p.name, 'aria-label': 'שם השלב',
+        class: 'grow', type: 'text', value: p.name, 'aria-label': 'שם הכותרת',
         onchange: (e) => updateDoc((d) => { d.phases[i].name = e.target.value; }),
       }),
       h('button', {
-        class: 'icon-btn', 'aria-label': 'מחיקת השלב', disabled: doc.tasks.some((t) => t.phase === p.id), title: 'אפשר למחוק רק שלב ריק',
+        class: 'icon-btn', disabled: doc.tasks.some((t) => t.phase === p.id),
         onclick: () => updateDoc((d) => { d.phases = d.phases.filter((x) => x.id !== p.id); }),
-      }, '✕'))),
-    h('button', { class: 'btn', onclick: () => updateDoc((d) => { d.phases.push({ id: `p${Date.now().toString(36)}`, name: 'שלב חדש' }); }) }, '+ שלב'),
+      }, doc.tasks.some((t) => t.phase === p.id) ? 'יש בה משימות' : 'מחיקה'))),
+    h('button', { class: 'btn', onclick: () => updateDoc((d) => { d.phases.push({ id: `p${Date.now().toString(36)}`, name: 'כותרת חדשה' }); }) }, '+ כותרת'),
 
     h('h3', {}, 'תצוגה'),
     h('div', { class: 'grid2' },

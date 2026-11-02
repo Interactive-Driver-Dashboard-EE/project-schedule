@@ -1,5 +1,6 @@
 import { s } from './dom.js';
 import { isMilestone, toDay, toIso } from './model.js';
+import { phaseName, taskName } from './mspdi.js';
 
 // Hues come from a validated categorical order: its first three slots hold up
 // for marks that can sit next to any other, so documents get neutral gray.
@@ -90,11 +91,9 @@ export function drawHeader(L, doc, P, todayDay) {
   for (const b of doc.blackouts || []) {
     const { left, width } = span(L, toDay(b.start), toDay(b.end));
     g.append(s('rect', { x: left, y: 25, width, height: 18, rx: 3, fill: P.band, stroke: P.axis }));
-    if (width > 44) {
-      g.append(s('text', {
-        x: left + width / 2, y: 38, 'text-anchor': 'middle', 'font-size': 10, fill: P.bandInk,
-      }, (L.lang === 'en' && b.shortEn) || b.short || b.name));
-    }
+    g.append(s('text', {
+      x: left + width / 2, y: 38, 'text-anchor': 'middle', 'font-size': 10, fill: P.bandInk,
+    }, (L.lang === 'en' && b.shortEn) || b.short || b.name));
   }
   if (todayDay >= L.start && todayDay <= L.end) {
     const tx = L.x(todayDay + 0.5);
@@ -124,6 +123,26 @@ function diamond(cx, cy, r) {
   return `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`;
 }
 
+// Writes a name beside its mark, on the later-in-time side unless it would run
+// off the chart. `early` and `late` are the mark's two edges in chart x.
+function drawLabel(g, L, text, early, late, y, P, weight) {
+  const estimate = text.length * 6.4;
+  let extendsLeft = L.sign < 0;
+  const edge = () => (extendsLeft ? Math.min(early, late) - 6 : Math.max(early, late) + 6);
+  const overflows = () => (extendsLeft ? edge() - estimate < 0 : edge() + estimate > L.width);
+  if (overflows()) extendsLeft = !extendsLeft;
+  // A mark spanning the whole chart leaves no room on either side, so the name
+  // goes over its middle instead.
+  const centered = overflows();
+  const rtl = L.lang === 'he';
+  g.append(s('text', {
+    x: centered ? (early + late) / 2 : edge(), y, 'font-size': 11.5, 'font-weight': weight, fill: P.ink,
+    direction: rtl ? 'rtl' : 'ltr',
+    'text-anchor': centered ? 'middle' : extendsLeft === rtl ? 'start' : 'end',
+    stroke: P.surface, 'stroke-width': centered ? 7 : 3, 'paint-order': 'stroke', 'pointer-events': 'none',
+  }, text));
+}
+
 function drawMilestone(g, L, t, r, y, P, late) {
   const cx = L.x(r.end + 0.5);
   const cy = y + ROW_H / 2;
@@ -140,12 +159,11 @@ function drawMilestone(g, L, t, r, y, P, late) {
     'stroke-width': 2,
   }));
   if (t.type === 'gate') part.append(s('polygon', { points: diamond(cx, cy, 3), fill: hollow ? color : P.surface }));
-  const iso = toIso(r.end);
-  part.append(s('text', {
-    x: cx + (L.sign * (size + 5)), y: cy + 4, 'font-size': 10.5, fill: P.ink2,
-    'text-anchor': L.sign > 0 ? 'start' : 'end',
-  }, `${Number(iso.slice(8))}.${Number(iso.slice(5, 7))}${t.unverified ? ' ?' : ''}`));
   g.append(part);
+  const iso = toIso(r.end);
+  const date = `${iso.slice(8)}.${iso.slice(5, 7)}.${iso.slice(2, 4)}`;
+  const flag = t.unverified ? (L.lang === 'en' ? ' · unverified' : ' · לא מאומת') : '';
+  drawLabel(g, L, `${taskName(t, L.lang)} · ${date}${flag}`, cx - size, cx + size, cy + 4, P, 500);
 }
 
 function drawBar(g, L, t, r, y, P, opts, critical) {
@@ -183,6 +201,7 @@ function drawBar(g, L, t, r, y, P, opts, critical) {
     }));
   }
   g.append(part);
+  drawLabel(g, L, taskName(t, L.lang), left, left + width, y + (ROW_H / 2) + 4, P, 400);
 }
 
 // `rows` is the visible list: {kind:'phase', phase, roll} or {kind:'task', task}.
@@ -267,6 +286,7 @@ export function drawBody(L, doc, sched, rows, P, opts) {
       if (!row.roll) return;
       const { left, width } = span(L, row.roll.start, row.roll.end);
       root.append(s('rect', { x: left, y: y + 12, width, height: 6, rx: 3, fill: P.ink2 }));
+      drawLabel(root, L, phaseName(row.phase, L.lang), left, left + width, y + (ROW_H / 2) + 4, P, 700);
       return;
     }
     const t = row.task;

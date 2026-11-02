@@ -9,7 +9,7 @@ import {
 import { phaseName, taskName, toMspdi } from './mspdi.js';
 import { renderSettings, renderTaskDrawer } from './panels.js';
 
-const ZOOMS = { week: 14, month: 6, all: 3 };
+const ZOOMS = { week: 14, month: 6, all: 2 };
 const SAVE_DELAY_MS = 15000;
 const POLL_MS = 180000;
 const TOKEN_KEY = 'schedule.token';
@@ -23,7 +23,7 @@ const storage = {
 
 function loadPrefs() {
   const defaults = {
-    zoom: 'month', lang: 'he', showDeps: true, showCritical: true, showBaseline: false, theme: 'auto', collapsed: [], owner: '', track: '', query: '', tab: 'gantt',
+    zoom: 'all', lang: 'he', showDeps: true, showCritical: true, showBaseline: false, theme: 'auto', collapsed: [], owner: '', track: '', query: '', tab: 'gantt',
   };
   try { return { ...defaults, ...JSON.parse(storage.get(PREFS_KEY) || '{}') }; } catch { return defaults; }
 }
@@ -376,6 +376,13 @@ function renderToolbar() {
     role: 'tab', 'aria-selected': String(p.tab === key), onclick: () => setPref('tab', key),
   }, label);
   const zoom = (key, label) => h('button', { 'aria-pressed': String(p.zoom === key), onclick: () => setPref('zoom', key) }, label);
+  const heading = () => {
+    const name = window.prompt('שם הכותרת החדשה:');
+    if (!name || !name.trim()) return;
+    const id = `p${Date.now().toString(36)}`;
+    state.lastPhase = id;
+    commit((doc) => { doc.phases.push({ id, name: name.trim() }); });
+  };
   const toggle = (key, label) => h('label', { class: 'check' },
     h('input', { type: 'checkbox', checked: p[key], onchange: (e) => setPref(key, e.target.checked) }), label);
   nodes.undoBtn = h('button', { class: 'btn', onclick: undo, title: 'ביטול (Ctrl+Z)' }, 'ביטול');
@@ -385,8 +392,10 @@ function renderToolbar() {
   return h('div', { class: 'toolbar' },
     h('div', { class: 'tabs', role: 'tablist' }, tab('gantt', 'גאנט'), tab('week', 'השבוע'), tab('issues', `בעיות ובדיקות (${state.issues.length})`)),
     h('button', { class: 'btn primary', onclick: () => addTask() }, '+ משימה'),
+    h('button', { class: 'btn', onclick: heading }, '+ כותרת'),
     nodes.undoBtn, nodes.redoBtn, nodes.saveBtn,
-    p.tab === 'gantt' && h('div', { class: 'tabs', 'aria-label': 'זום' }, zoom('week', 'שבועות'), zoom('month', 'חודשים'), zoom('all', 'כל השנה')),
+    p.tab === 'gantt' && h('span', { class: 'field-inline' }, 'תצוגה',
+      h('div', { class: 'tabs' }, zoom('week', 'שבועות'), zoom('month', 'חודשים'), zoom('all', 'כל השנה'))),
     p.tab === 'gantt' && h('button', { class: 'btn', onclick: () => scrollToDay(toDay(todayIso())) }, 'להיום'),
     h('label', { class: 'field-inline' }, 'אחראי',
       h('select', { onchange: (e) => setPref('owner', e.target.value) },
@@ -398,11 +407,11 @@ function renderToolbar() {
       type: 'search', placeholder: 'חיפוש…', value: p.query, 'aria-label': 'חיפוש משימה',
       onchange: (e) => setPref('query', e.target.value),
     }),
-    p.tab === 'gantt' && toggle('showCritical', 'נתיב קריטי'),
-    p.tab === 'gantt' && toggle('showDeps', 'תלויות'),
+    p.tab === 'gantt' && toggle('showCritical', 'סימון מרווח קטן'),
+    p.tab === 'gantt' && toggle('showDeps', 'קווי תלות'),
     p.tab === 'gantt' && (state.doc.baselines || []).length > 0 && toggle('showBaseline', 'קו בסיס'),
     h('div', { class: 'grow' }),
-    h('button', { class: `btn ${state.whatIf ? 'on' : ''}`, onclick: toggleWhatIf }, 'מה אם?'),
+    h('button', { class: `btn ${state.whatIf ? 'on' : ''}`, onclick: toggleWhatIf }, 'בדיקת "מה אם"'),
     renderExportMenu(),
     h('button', { class: 'btn', onclick: () => { state.panel = 'settings'; state.selected = null; render(); } }, 'הגדרות'));
 }
@@ -512,23 +521,46 @@ function renderBanners() {
   return out;
 }
 
+// Lists only what is on the chart right now, so the legend stays readable.
 function renderLegend() {
+  const tasks = state.doc.tasks;
+  const bars = tasks.filter((t) => !isMilestone(t));
+  const item = (cls, label) => h('span', {}, h('i', { class: `swatch ${cls}` }), label);
+  const tracks = [['hw', 'חומרה'], ['fw', 'קושחה'], ['veh', 'רכב'], ['docs', 'מסמכים']]
+    .filter(([key]) => bars.some((t) => t.track === key));
   return h('div', { class: 'legend' },
-    h('span', {}, h('i', { class: 'swatch hw' }), 'חומרה'),
-    h('span', {}, h('i', { class: 'swatch fw' }), 'קושחה'),
-    h('span', {}, h('i', { class: 'swatch veh' }), 'רכב'),
-    h('span', {}, h('i', { class: 'swatch docs' }), 'מסמכים'),
-    h('span', {}, h('i', { class: 'swatch ext' }), 'תלוי בגורם חיצוני'),
-    h('span', {}, h('i', { class: 'swatch tight' }), `מרווח עד ${state.doc.settings?.criticalDays ?? 7} ימים`),
-    h('span', {}, h('i', { class: 'swatch dia' }), 'מועד / שער'),
-    h('span', {}, h('i', { class: 'swatch dia open' }), 'לא מאומת'),
-    h('span', {}, h('i', { class: 'swatch band' }), 'בחינות'));
+    tracks.map(([key, label]) => item(key, label)),
+    bars.some((t) => t.external) && item('ext', 'תלוי בגורם חיצוני'),
+    bars.length > 0 && item('tight', `מרווח של עד ${state.doc.settings?.criticalDays ?? 7} ימים`),
+    tasks.some((t) => isMilestone(t) && !t.unverified) && item('dia', 'מועד'),
+    tasks.some((t) => isMilestone(t) && t.unverified) && item('dia open', 'מועד לא מאומת'),
+    (state.doc.blackouts || []).length > 0 && item('band', 'תקופה חסומה'),
+    h('span', { class: 'hint' }, 'לחיצה על שורה פותחת עריכה. גרירה בתרשים מזיזה את התאריך.'));
 }
 
-function statusGlyph(t) {
-  const map = { done: ['✓', 'done', 'הושלם'], doing: ['◐', 'doing', 'בעבודה'], blocked: ['✕', 'blocked', 'חסום'], todo: ['○', 'todo', 'לא התחיל'] };
-  const [g, cls, label] = map[t.status] || map.todo;
-  return h('span', { class: `st ${cls}`, title: label, 'aria-label': label }, g);
+function statusCell(t) {
+  const map = { done: ['done', '✓ הושלם'], doing: ['doing', 'בעבודה'], blocked: ['blocked', 'חסום'], todo: ['todo', 'לא התחיל'] };
+  const [cls, label] = map[t.status] || map.todo;
+  return h('span', { class: `c-status st ${cls}` }, label);
+}
+
+// The name column is as wide as the longest name, so nothing is cut off, up to a
+// limit that leaves room for the chart. Longer names wrap onto a second line.
+function nameColumnWidth(rows) {
+  if (innerWidth <= 900) return 170;
+  const ctx = document.createElement('canvas').getContext('2d');
+  ctx.font = '700 14px system-ui, -apple-system, "Segoe UI", Arial, sans-serif';
+  let widest = 120;
+  for (const row of rows) {
+    const t = row.task;
+    const text = row.kind === 'phase' ? phaseName(row.phase, state.prefs.lang) : taskName(t, state.prefs.lang);
+    let w = ctx.measureText(text).width + 34;
+    if (t?.decision) w += 50;
+    if (t?.unverified) w += 66;
+    if (t?.issue) w += 60;
+    widest = Math.max(widest, w);
+  }
+  return Math.ceil(Math.min(widest, innerWidth * 0.36));
 }
 
 function renderTableRow(row) {
@@ -545,14 +577,15 @@ function renderTableRow(row) {
     h('span', { class: 'c-name' },
       h('span', { class: 'chev' }, collapsed ? '‹' : '⌄'),
       h('span', { class: 'label' }, phaseName(row.phase, state.prefs.lang))),
-    h('span', { class: 'c-owner num' }, roll ? `${roll.done}/${roll.total}` : ''),
+    h('span', { class: 'c-status' }, roll ? `${roll.done}/${roll.total} הושלמו` : ''),
+    h('span', { class: 'c-owner' }),
     h('span', { class: 'c-dates num' }, roll ? `${fmtShort(roll.start)}–${fmtShort(roll.end)}` : ''),
     h('span', { class: 'c-slack' }));
   }
   const t = row.task;
   const r = state.sched.rows.get(t.id);
   const issue = t.issue && state.remoteIssues.get(t.issue);
-  const showSlack = r && t.status !== 'done';
+  const showSlack = r && t.status !== 'done' && !(isMilestone(t) && t.fixed);
   return h('button', {
     class: `row task ${state.selected === t.id ? 'sel' : ''}`,
     dataset: { row: t.id },
@@ -561,12 +594,12 @@ function renderTableRow(row) {
     onmouseleave: (e) => setHover(e.currentTarget, null),
   },
   h('span', { class: 'c-name' },
-    statusGlyph(t),
     isMilestone(t) && h('span', { 'aria-hidden': 'true' }, '◆'),
     h('span', { class: 'label', title: taskName(t, state.prefs.lang) }, taskName(t, state.prefs.lang)),
     t.decision && h('span', { class: 'tag q' }, 'החלטה'),
     t.unverified && h('span', { class: 'tag q' }, 'לא מאומת'),
-    t.issue && h('span', { class: 'tag issue', title: issue?.state === 'closed' ? 'Issue סגור' : 'Issue' }, `#${t.issue}${issue?.state === 'closed' ? ' ✓' : ''}`)),
+    t.issue && h('span', { class: 'tag issue' }, `Issue ${t.issue}${issue?.state === 'closed' ? ' סגור' : ''}`)),
+  statusCell(t),
   h('span', { class: 'c-owner' }, personName(t.owner)),
   h('span', { class: 'c-dates num' }, r ? (isMilestone(t) ? fmt(r.end) : `${fmtShort(r.start)}–${fmtShort(r.end)}`) : ''),
   h('span', { class: `c-slack num ${showSlack && r.slack < 0 ? 'bad' : ''}`, title: 'מרווח בימים עד שהמשימה פוגעת במועד' },
@@ -582,11 +615,22 @@ function setHover(rowEl, id) {
   nodes.hover.setAttribute('visibility', 'visible');
 }
 
+// "All of it" fits the whole project into the space beside the table.
+function pixelsPerDay(nameW) {
+  if (state.prefs.zoom !== 'all') return ZOOMS[state.prefs.zoom];
+  const phone = innerWidth <= 900;
+  const table = nameW + (phone ? 0 : 220);
+  const panel = state.panel && !phone ? 380 : 0;
+  const days = state.sched.projectEnd - state.sched.projectStart + 29;
+  return Math.max(ZOOMS.all, (innerWidth - table - panel - 18) / days);
+}
+
 function renderGantt() {
   const prefs = state.prefs;
   const P = PALETTES[themeName()];
-  const L = buildLayout(state.doc, state.sched, { ppd: ZOOMS[prefs.zoom], lang: prefs.lang });
   const rows = visibleRows();
+  const nameW = nameColumnWidth(rows);
+  const L = buildLayout(state.doc, state.sched, { ppd: pixelsPerDay(nameW), lang: prefs.lang });
   const todayDay = toDay(todayIso());
   const body = drawBody(L, state.doc, state.sched, rows, P, {
     showDeps: prefs.showDeps,
@@ -617,11 +661,14 @@ function renderGantt() {
   const tbody = h('div', { class: 'tbody' }, rows.map(renderTableRow));
   nodes.tbody = tbody;
   const th = h('div', { class: 'th' },
-    h('span', { class: 'c-name' }, 'משימה'),
+    h('span', { class: 'c-name' }, 'שם'),
+    h('span', { class: 'c-status' }, 'סטטוס'),
     h('span', { class: 'c-owner' }, 'אחראי'),
     h('span', { class: 'c-dates' }, 'תאריכים'),
-    h('span', { class: 'c-slack', title: 'מרווח בימים' }, 'מרווח'));
-  return h('div', { class: `gantt ${prefs.lang === 'en' ? 'ltr' : ''}` }, th, head, tbody, svg);
+    h('span', { class: 'c-slack' }, 'מרווח בימים'));
+  const grid = h('div', { class: `gantt ${prefs.lang === 'en' ? 'ltr' : ''}` }, th, head, tbody, svg);
+  grid.style.setProperty('--name-w', `${nameW}px`);
+  return grid;
 }
 
 export function scrollToDay(day) {
@@ -866,9 +913,11 @@ function renderWeekPage() {
 export function addTask(phaseId) {
   const doc = state.doc;
   const selected = state.selected && taskById(state.selected);
-  const phase = phaseId || selected?.phase || doc.phases[0]?.id;
+  const exists = (p) => doc.phases.some((x) => x.id === p);
+  const phase = [phaseId, selected?.phase, state.lastPhase].find(exists) || doc.phases[0]?.id || 'general';
   const id = nextId();
   commit((d) => {
+    if (!d.phases.some((x) => x.id === phase)) d.phases.push({ id: phase, name: 'כללי' });
     const task = {
       id, name: 'משימה חדשה', phase, track: selected?.track || 'hw', owner: 'both', type: 'task',
       status: 'todo', duration: 5, start: todayIso(), deps: [],
