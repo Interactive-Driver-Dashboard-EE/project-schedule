@@ -23,7 +23,7 @@ const storage = {
 
 function loadPrefs() {
   const defaults = {
-    zoom: 'all', layout: 'heading', lang: 'he', showDeps: true, showCritical: true, showBaseline: false, theme: 'auto', collapsed: [], owner: '', track: '', query: '', tab: 'gantt',
+    zoom: 'all', layout: 'heading', lang: 'he', showDeps: true, showBaseline: false, theme: 'auto', collapsed: [], owner: '', track: '', query: '', tab: 'gantt',
   };
   try { return { ...defaults, ...JSON.parse(storage.get(PREFS_KEY) || '{}') }; } catch { return defaults; }
 }
@@ -407,7 +407,6 @@ function renderToolbar() {
       type: 'search', placeholder: 'חיפוש…', value: p.query, 'aria-label': 'חיפוש משימה',
       onchange: (e) => setPref('query', e.target.value),
     }),
-    p.tab === 'gantt' && toggle('showCritical', 'סימון מרווח קטן'),
     p.tab === 'gantt' && toggle('showDeps', 'קווי תלות'),
     p.tab === 'gantt' && (state.doc.baselines || []).length > 0 && toggle('showBaseline', 'קו בסיס'),
     h('div', { class: 'grow' }),
@@ -444,7 +443,6 @@ function exportOptions(lang) {
     lang,
     baseline: (state.doc.baselines || []).at(-1) || null,
     todayDay: toDay(todayIso()),
-    criticalDays: state.doc.settings?.criticalDays ?? 7,
     lateMilestones: lateMilestones(),
     layout: state.prefs.layout,
   };
@@ -532,7 +530,7 @@ function renderLegend() {
   return h('div', { class: 'legend' },
     tracks.map(([key, label]) => item(key, label)),
     bars.some((t) => t.external) && item('ext', 'תלוי בגורם חיצוני'),
-    bars.length > 0 && item('tight', `מרווח של עד ${state.doc.settings?.criticalDays ?? 7} ימים`),
+    bars.some((t) => t.status !== 'done' && state.sched.rows.get(t.id)?.slack < 0) && item('late', 'חורגת ממועד'),
     tasks.some((t) => isMilestone(t) && !t.unverified) && item('dia', 'מועד'),
     tasks.some((t) => isMilestone(t) && t.unverified) && item('dia open', 'מועד לא מאומת'),
     (state.doc.blackouts || []).length > 0 && item('band', 'תקופה חסומה'),
@@ -661,8 +659,6 @@ function renderGantt() {
   const todayDay = toDay(todayIso());
   const body = drawBody(L, state.doc, state.sched, rows, P, {
     showDeps: prefs.showDeps,
-    showCritical: prefs.showCritical,
-    criticalDays: state.doc.settings?.criticalDays ?? 7,
     baseline: currentBaseline(),
     todayDay,
     lateMilestones: lateMilestones(),
@@ -818,8 +814,6 @@ function redrawGantt() {
   const rows = visibleRows(L);
   const body = drawBody(L, state.doc, state.sched, rows, P, {
     showDeps: prefs.showDeps,
-    showCritical: prefs.showCritical,
-    criticalDays: state.doc.settings?.criticalDays ?? 7,
     baseline: currentBaseline(),
     todayDay: toDay(todayIso()),
     lateMilestones: lateMilestones(),

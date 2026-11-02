@@ -8,16 +8,16 @@ export const PALETTES = {
   light: {
     surface: '#fcfcfb', ink: '#0b0b0b', ink2: '#52514e', muted: '#898781', grid: '#e1e0d9', axis: '#c3c2b7',
     band: '#f0efec', bandInk: '#52514e', baseline: '#52514e', critical: '#d03b3b', hover: 'rgba(11,11,11,0.05)',
-    hatch: 'rgba(255,255,255,0.75)', marker: '#fde68a',
+    hatch: 'rgba(255,255,255,0.75)', marker: '#fde68a', barFill: 0.3, doneFill: 0.45,
     named: {
       blue: '#2a78d6', orange: '#eb6834', aqua: '#1baf7a', yellow: '#eda100', magenta: '#e87ba4', green: '#008300', violet: '#6250d6', red: '#e34948',
     },
     tracks: { hw: '#2a78d6', fw: '#eb6834', veh: '#1baf7a', docs: '#898781' },
   },
   dark: {
-    surface: '#1a1a19', ink: '#f0efec', ink2: '#c3c2b7', muted: '#898781', grid: '#2c2c2a', axis: '#383835',
-    band: '#262624', bandInk: '#c3c2b7', baseline: '#c3c2b7', critical: '#e66767', hover: 'rgba(255,255,255,0.06)',
-    hatch: 'rgba(255,255,255,0.55)', marker: '#6b5310',
+    surface: '#1a1a19', ink: '#f0efec', ink2: '#c3c2b7', muted: '#a3a29b', grid: '#333331', axis: '#55554f',
+    band: '#3a3a35', bandInk: '#f0efec', baseline: '#c3c2b7', critical: '#e66767', hover: 'rgba(255,255,255,0.06)',
+    hatch: 'rgba(255,255,255,0.55)', marker: '#6b5310', barFill: 0.5, doneFill: 0.65,
     named: {
       blue: '#3987e5', orange: '#d95926', aqua: '#199e70', yellow: '#c98500', magenta: '#d55181', green: '#008300', violet: '#9085e9', red: '#e66767',
     },
@@ -334,7 +334,7 @@ function drawMilestone(g, L, t, r, y, P, late, selected) {
   drawLabel(g, L, milestoneText(t, r, L), cx - size - 1, cx + size + 1, cy + 4, P, labelWeight(t), hasEmphasis(t, 'marker'));
 }
 
-function drawBar(g, L, t, r, y, P, opts, critical) {
+function drawBar(g, L, t, r, y, P, opts, late) {
   const { left, width } = span(L, r.start, r.end);
   const color = (t.color && P.named[t.color]) || P.tracks[t.track] || P.tracks.docs;
   const large = hasEmphasis(t, 'large');
@@ -345,7 +345,7 @@ function drawBar(g, L, t, r, y, P, opts, critical) {
   part.append(s('rect', { x: left - 2, y: y + 2, width: width + 4, height: ROW_H - 4, fill: 'transparent' }));
   const done = t.status === 'done';
   part.append(shape(left, top, width, height, {
-    fill: color, 'fill-opacity': hasEmphasis(t, 'solid') ? 1 : done ? 0.45 : 0.3, stroke: color,
+    fill: color, 'fill-opacity': hasEmphasis(t, 'solid') ? 1 : done ? P.doneFill : P.barFill, stroke: color,
     'stroke-width': 1, 'stroke-dasharray': t.decision ? '3 2' : undefined,
   }));
   const pct = done ? 0 : Math.min(Math.max(t.progress || 0, 0), 100) / 100;
@@ -355,7 +355,7 @@ function drawBar(g, L, t, r, y, P, opts, critical) {
   }
   if (t.external) part.append(shape(left, top, width, height, { fill: 'url(#hatch)' }));
   if (hasEmphasis(t, 'frame')) part.append(shape(left, top, width, height, { fill: 'none', stroke: P.ink, 'stroke-width': 2.5 }));
-  if (critical) {
+  if (late) {
     part.append(shape(left - 1, top - 1, width + 2, height + 2, { fill: 'none', stroke: P.critical, 'stroke-width': 2 }));
   }
   if (opts.selected === t.id) {
@@ -419,12 +419,7 @@ export function drawBody(L, doc, sched, rows, P, opts) {
     }
   }
 
-  const criticalOf = (t, r) => {
-    if (t.status === 'done') return false;
-    if (r.slack < 0) return true;
-    if (isMilestone(t)) return false;
-    return opts.showCritical && r.slack <= opts.criticalDays;
-  };
+  const lateOf = (t, r) => t.status !== 'done' && r.slack < 0;
 
   if (opts.showDeps) {
     const layer = s('g', { 'pointer-events': 'none' });
@@ -439,7 +434,7 @@ export function drawBody(L, doc, sched, rows, P, opts) {
         const toStart = isMilestone(t) ? L.x(r.end + 0.5) - (L.sign * 9) : L.x(r.start);
         const fromY = yOf.get(dep.id) + ROW_H / 2;
         const toY = yOf.get(t.id) + ROW_H / 2;
-        const hot = criticalOf(t, r) && criticalOf(pred, p);
+        const hot = lateOf(t, r) && lateOf(pred, p);
         layer.append(s('path', {
           d: depPath(L, fromEnd, fromY, toStart, toY), fill: 'none',
           stroke: hot ? P.critical : P.muted, 'stroke-width': 1, 'stroke-opacity': hot ? 0.9 : 0.55,
@@ -472,7 +467,7 @@ export function drawBody(L, doc, sched, rows, P, opts) {
       const r = sched.rows.get(t.id);
       if (!r) continue;
       if (isMilestone(t)) drawMilestone(root, L, t, r, y, P, opts.lateMilestones?.has(t.id), opts.selected === t.id);
-      else drawBar(root, L, t, r, y, P, opts, criticalOf(t, r));
+      else drawBar(root, L, t, r, y, P, opts, lateOf(t, r));
     }
   });
 

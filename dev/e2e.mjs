@@ -394,7 +394,7 @@ try {
         const app = await import('/js/app.js');
         const ex = await import('/js/export.js');
         const { toDay } = await import('/js/model.js');
-        const svg = ex.buildExportSvg(app.state.doc, app.state.sched, { lang: '${lang}', baseline: null, todayDay: toDay(app.todayIso()), criticalDays: 7, lateMilestones: new Set() });
+        const svg = ex.buildExportSvg(app.state.doc, app.state.sched, { lang: '${lang}', baseline: null, todayDay: toDay(app.todayIso()), lateMilestones: new Set() });
         const url = URL.createObjectURL(new Blob([ex.svgText(svg)], { type: 'image/svg+xml' }));
         const img = new Image();
         await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('img')); img.src = url; });
@@ -404,6 +404,25 @@ try {
       })()`);
       writeFileSync(join(shots, `08-export-${lang}.png`), Buffer.from(dataUrl.split(',')[1], 'base64'));
     }
+  });
+
+  await step('only work that misses a date gets a red frame', async () => {
+    const framed = await evaluate(`(async () => {
+      const g = await import('/js/gantt.js');
+      const { schedule } = await import('/js/model.js');
+      const task = (id, duration, gate) => [
+        { id, name: id, phase: 'p', track: 'hw', type: 'task', status: 'todo', owner: 'both', duration, start: '2027-01-01', deps: [] },
+        { id: gate, name: gate, phase: 'p', track: 'docs', type: 'deadline', status: 'todo', owner: 'both', fixed: '2027-01-08', deps: [{ id }] },
+      ];
+      const doc = { projectStart: '2027-01-01', phases: [{ id: 'p', name: 'p' }], people: [], blackouts: [], baselines: [], tasks: [...task('tight', 5, 'a'), ...task('over', 20, 'b')] };
+      const sched = schedule(doc);
+      const L = g.buildLayout(doc, sched, { ppd: 4, lang: 'he' });
+      const P = g.PALETTES.dark;
+      const { node } = g.drawBody(L, doc, sched, g.layoutRows(doc, sched, L, 'list', { filtering: true }), P, { showDeps: false, interactive: false });
+      return ['tight', 'over'].filter((id) => node.querySelector('.bar[data-task="' + id + '"] [stroke="' + P.critical + '"]'));
+    })()`);
+    assert.deepEqual(framed, ['over']);
+    assert.ok(!(await evaluate(`document.body.innerText.includes('סימון מרווח קטן')`)));
   });
 
   await step('dark theme and phone width render without overflow', async () => {

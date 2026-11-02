@@ -10,7 +10,7 @@ const dd = (day) => {
 
 // One self-contained SVG with the task list and chart, always in light colors,
 // used for both the image download and printing.
-export function buildExportSvg(doc, sched, { lang, baseline, todayDay, criticalDays, lateMilestones, layout }) {
+export function buildExportSvg(doc, sched, { lang, baseline, todayDay, lateMilestones, layout }) {
   const P = PALETTES.light;
   const L = buildLayout(doc, sched, { ppd: 4, lang });
   const rows = layoutRows(doc, sched, L, layout, { filtering: true });
@@ -19,7 +19,7 @@ export function buildExportSvg(doc, sched, { lang, baseline, todayDay, criticalD
   const titleH = 44;
   const legendH = 28;
   const body = drawBody(L, doc, sched, rows, P, {
-    showDeps: true, showCritical: true, criticalDays, baseline, todayDay, lateMilestones, interactive: false,
+    showDeps: true, baseline, todayDay, lateMilestones, interactive: false,
   });
   const totalW = tableW + L.width;
   const totalH = titleH + HEAD_H + body.height + legendH;

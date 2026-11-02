@@ -358,11 +358,7 @@ export function renderSettings() {
     h('h3', {}, 'תצוגה'),
     h('div', { class: 'grid2' },
       field('ערכת צבעים', select('theme', [['auto', 'לפי המערכת'], ['light', 'בהיר'], ['dark', 'כהה']], state.prefs.theme, (v) => { state.prefs.theme = v; savePrefs(); applyTheme(); render(); })),
-      field('שפת התרשים', select('lang', [['he', 'עברית'], ['en', 'English']], state.prefs.lang, (v) => setPref('lang', v))),
-      field('סימון מרווח קטן (ימים)', h('input', {
-        type: 'number', min: 0, value: doc.settings?.criticalDays ?? 7, dataset: { fieldKey: 'crit' },
-        onchange: (e) => updateDoc((d) => { d.settings = { ...(d.settings || {}), criticalDays: Math.max(0, Number(e.target.value) || 0) }; }),
-      }))),
+      field('שפת התרשים', select('lang', [['he', 'עברית'], ['en', 'English']], state.prefs.lang, (v) => setPref('lang', v)))),
 
     h('h3', {}, 'חיבור'),
     h('p', { class: 'hint' }, `מחוברים לריפו הפרטי. כל שמירה היא commit, וההיסטוריה המלאה נמצאת שם. שמות האחראים: ${(doc.people || []).map((p) => personName(p.id)).join(', ')}.`),

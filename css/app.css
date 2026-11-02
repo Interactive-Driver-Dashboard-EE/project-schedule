@@ -8,6 +8,7 @@
   --muted: #6f6d68;
   --grid: #e1e0d9;
   --axis: #c3c2b7;
+  --band: #f0efec;
   --wash: rgba(11, 11, 11, 0.05);
   --accent: #1c5cab;
   --accent-ink: #ffffff;
@@ -34,8 +35,9 @@
     --ink: #f0efec;
     --ink2: #c3c2b7;
     --muted: #a3a29b;
-    --grid: #2c2c2a;
-    --axis: #383835;
+    --grid: #333331;
+    --axis: #55554f;
+    --band: #3a3a35;
     --wash: rgba(255, 255, 255, 0.07);
     --accent: #86b6ef;
     --accent-ink: #0b0b0b;
@@ -59,8 +61,9 @@
   --ink: #f0efec;
   --ink2: #c3c2b7;
   --muted: #a3a29b;
-  --grid: #2c2c2a;
-  --axis: #383835;
+  --grid: #333331;
+  --axis: #55554f;
+  --band: #3a3a35;
   --wash: rgba(255, 255, 255, 0.07);
   --accent: #86b6ef;
   --accent-ink: #0b0b0b;
@@ -125,8 +128,8 @@ input[type="search"] { width: 120px; }
 .swatch { width: 14px; height: 10px; border-radius: 3px; display: inline-block; flex: none; }
 .swatch.hw { background: var(--hw); } .swatch.fw { background: var(--fw); } .swatch.veh { background: var(--veh); } .swatch.docs { background: var(--docs); }
 .swatch.ext { background: repeating-linear-gradient(45deg, var(--docs), var(--docs) 2px, var(--surface) 2px, var(--surface) 4px); }
-.swatch.tight { background: transparent; border: 2px solid var(--critical); }
-.swatch.band { background: var(--grid); border: 1px solid var(--axis); }
+.swatch.late { background: transparent; border: 2px solid var(--critical); }
+.swatch.band { background: var(--band); border: 1px solid var(--axis); }
 .swatch.dia { width: 10px; height: 10px; border-radius: 0; transform: rotate(45deg); background: var(--ink); }
 .swatch.dia.open { background: transparent; border: 2px solid var(--ink); }
 
