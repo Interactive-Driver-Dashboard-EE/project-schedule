@@ -1,7 +1,10 @@
 import {
-  addTask, applyTheme, commit, createIssueFor, disconnect, fmt, personName, render, savePrefs, setPref, state, takeNewBaseline, taskById, toast, todayIso,
+  addTask, applyTheme, commit, createIssueFor, themeName, disconnect, fmt, personName, render, savePrefs, setPref, state, takeNewBaseline, taskById, toast, todayIso,
 } from './app.js';
-import { h } from './dom.js';
+import { h, s } from './dom.js';
+import {
+  barShape, markShape, PALETTES, STYLE,
+} from './gantt.js';
 import { addDays, isMilestone, toDay, toIso, wouldCreateCycle } from './model.js';
 import { taskName } from './mspdi.js';
 
@@ -145,6 +148,63 @@ function renderCriteria(t) {
     }));
 }
 
+function preview(milestone, shape, color) {
+  const box = s('svg', { width: 28, height: 18, 'aria-hidden': 'true' });
+  box.append(milestone
+    ? markShape(shape, 14, 9, 7, { fill: color })
+    : barShape({ sign: -1 }, shape, 1, 3, 26, 12, { fill: color }));
+  return box;
+}
+
+function renderStyle(t) {
+  const P = PALETTES[themeName()];
+  const milestone = isMilestone(t);
+  const shapes = milestone ? STYLE.markShapes : STYLE.barShapes;
+  const currentShape = shapes.some(([key]) => key === t.shape) ? t.shape : shapes[0][0];
+  const emphasis = STYLE.emphasis.filter(([key]) => !(milestone && key === 'solid'));
+  const swatchColor = (t.color && P.named[t.color]) || (milestone ? P.ink : P.tracks[t.track] || P.tracks.docs);
+  const option = (pressed, onclick, ...kids) => h('button', { class: 'style-opt', 'aria-pressed': String(pressed), onclick }, ...kids);
+  const dot = (color) => {
+    const el = h('i', { class: 'color-dot' });
+    el.style.background = color;
+    return el;
+  };
+  const styled = t.shape || t.color || (t.emphasis || []).length;
+  return h('div', { class: 'f' },
+    h('h3', {}, 'עיצוב: צורה'),
+    h('div', { class: 'style-grid' }, shapes.map(([key, label], i) => option(
+      currentShape === key,
+      () => update(t.id, (x) => { x.shape = i === 0 ? undefined : key; }),
+      preview(milestone, key, swatchColor),
+      label,
+    ))),
+    h('h3', {}, 'עיצוב: צבע'),
+    h('div', { class: 'style-grid' },
+      option(!t.color, () => update(t.id, (x) => { x.color = undefined; }), milestone ? 'ברירת מחדל' : 'לפי מסלול'),
+      STYLE.colors.map(([key, label]) => option(
+        t.color === key,
+        () => update(t.id, (x) => { x.color = key; }),
+        dot(P.named[key]),
+        label,
+      ))),
+    h('h3', {}, 'עיצוב: הדגשות'),
+    h('div', { class: 'style-grid' }, emphasis.map(([key, label]) => h('label', { class: 'check' },
+      h('input', {
+        type: 'checkbox',
+        checked: (t.emphasis || []).includes(key),
+        onchange: (e) => update(t.id, (x) => {
+          const set = new Set(x.emphasis || []);
+          if (e.target.checked) set.add(key); else set.delete(key);
+          x.emphasis = set.size ? [...set] : undefined;
+        }),
+      }),
+      label))),
+    styled && h('div', { class: 'actions' }, h('button', {
+      class: 'btn',
+      onclick: () => update(t.id, (x) => { x.shape = undefined; x.color = undefined; x.emphasis = undefined; }),
+    }, 'איפוס העיצוב')));
+}
+
 function setStatus(id, value) {
   update(id, (x) => {
     x.status = value;
@@ -210,6 +270,7 @@ export function renderTaskDrawer() {
       !t.external && h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!t.noPause, onchange: (e) => update(t.id, (x) => { x.noPause = e.target.checked || undefined; }) }), 'ממשיך גם בזמן בחינות'),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!t.unverified, onchange: (e) => update(t.id, (x) => { x.unverified = e.target.checked || undefined; }) }), 'התאריך לא מאומת'),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!t.decision, onchange: (e) => update(t.id, (x) => { x.decision = e.target.checked || undefined; }) }), 'החלטה פתוחה')),
+    renderStyle(t),
     renderDeps(t),
     renderCriteria(t),
     field('הערות', h('textarea', {

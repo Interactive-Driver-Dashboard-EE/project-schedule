@@ -187,6 +187,13 @@ input[type="search"] { width: 120px; }
 .dep-row { display: flex; align-items: center; gap: 6px; font-size: 13px; }
 .dep-row .label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dep-row input { width: 56px; }
+.style-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+.style-opt { display: inline-flex; align-items: center; gap: 5px; background: var(--surface); border: 1px solid var(--axis); border-radius: 6px; padding: 3px 8px; cursor: pointer; font-size: 12.5px; color: var(--ink); }
+.style-opt:hover { background: var(--wash); }
+.style-opt[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: -1px; font-weight: 700; }
+.color-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; flex: none; }
+.label.strong { font-weight: 800; }
+.label.marked { background: var(--warning-bg); color: var(--warning-ink); border-radius: 3px; padding-inline: 3px; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .hint { font-size: 12px; color: var(--muted); line-height: 1.45; }
 

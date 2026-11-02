@@ -248,6 +248,47 @@ try {
     assert.equal((await mockState()).commits.length, commits);
   });
 
+  await step('a task can get its own shape, color and emphasis, and they save', async () => {
+    const doc = (await mockState()).doc;
+    const barId = doc.tasks.find((t) => t.type === 'task' && t.id !== movable.id).id;
+    const r = await barRect(barId);
+    await click(r.x, r.y);
+    await clickButton('חץ');
+    await clickButton('סגול');
+    const tick = (label) => evaluate(`[...document.querySelectorAll('.drawer label.check')].find(l=>l.textContent.trim()===${JSON.stringify(label)}).querySelector('input').click()`);
+    await tick('שם מודגש');
+    await tick('מרקר על השם');
+    await tick('מסגרת עבה');
+    await tick('מילוי מלא');
+    const drawn = await evaluate(`(() => {
+      const part = document.querySelector('[data-task="${barId}"][data-part="bar"]');
+      return { fills: [...part.querySelectorAll('polygon')].map(p=>p.getAttribute('fill')), polygons: part.querySelectorAll('polygon').length };
+    })()`);
+    assert.ok(drawn.polygons > 0, 'an arrow bar is drawn as a polygon');
+    assert.ok(drawn.fills.includes('#6250d6'), 'the chosen color is used');
+    await shot('14-styled');
+    await clickButton('שמירה');
+    await sleep(300);
+    const saved = (await mockState()).doc.tasks.find((t) => t.id === barId);
+    assert.equal(saved.shape, 'arrow');
+    assert.equal(saved.color, 'violet');
+    assert.deepEqual([...saved.emphasis].sort(), ['bold', 'frame', 'marker', 'solid']);
+    await clickButton('איפוס העיצוב');
+    const cleared = await evaluate(`document.querySelector('[data-task="${barId}"][data-part="bar"] polygon') === null`);
+    assert.ok(cleared, 'reset returns to the default bar');
+
+    const markId = doc.tasks.find((t) => t.type === 'deadline' || t.type === 'gate').id;
+    await evaluate(`document.querySelector('.drawer .icon-btn').click()`);
+    const m = await barRect(markId);
+    await click(m.x, m.y);
+    await clickButton('כוכב');
+    await clickButton('ירוק');
+    await tick('גדול יותר');
+    assert.ok(await evaluate(`[...document.querySelectorAll('[data-task="${markId}"][data-part="bar"] polygon')].some(p=>p.getAttribute('fill')==='#008300' && p.getAttribute('points').split(' ').length===10)`), 'a green star is drawn');
+    await clickButton('איפוס העיצוב');
+    await evaluate(`document.querySelector('.drawer .icon-btn').click()`);
+  });
+
   await step('every name is written on the chart and in the table, without hovering', async () => {
     const chart = await evaluate(`[...document.querySelectorAll('.body-svg text')].map(t=>t.textContent).join('|')`);
     const table = await evaluate(`document.querySelector('.tbody').innerText`);

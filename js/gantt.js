@@ -8,15 +8,30 @@ export const PALETTES = {
   light: {
     surface: '#fcfcfb', ink: '#0b0b0b', ink2: '#52514e', muted: '#898781', grid: '#e1e0d9', axis: '#c3c2b7',
     band: '#f0efec', bandInk: '#52514e', baseline: '#52514e', critical: '#d03b3b', hover: 'rgba(11,11,11,0.05)',
-    hatch: 'rgba(255,255,255,0.75)',
+    hatch: 'rgba(255,255,255,0.75)', marker: '#fde68a',
+    named: {
+      blue: '#2a78d6', orange: '#eb6834', aqua: '#1baf7a', yellow: '#eda100', magenta: '#e87ba4', green: '#008300', violet: '#6250d6', red: '#e34948',
+    },
     tracks: { hw: '#2a78d6', fw: '#eb6834', veh: '#1baf7a', docs: '#898781' },
   },
   dark: {
     surface: '#1a1a19', ink: '#f0efec', ink2: '#c3c2b7', muted: '#898781', grid: '#2c2c2a', axis: '#383835',
     band: '#262624', bandInk: '#c3c2b7', baseline: '#c3c2b7', critical: '#e66767', hover: 'rgba(255,255,255,0.06)',
-    hatch: 'rgba(255,255,255,0.55)',
+    hatch: 'rgba(255,255,255,0.55)', marker: '#6b5310',
+    named: {
+      blue: '#3987e5', orange: '#d95926', aqua: '#199e70', yellow: '#c98500', magenta: '#d55181', green: '#008300', violet: '#9085e9', red: '#e66767',
+    },
     tracks: { hw: '#3987e5', fw: '#d95926', veh: '#199e70', docs: '#898781' },
   },
+};
+
+// What each task can choose in the edit panel. Names are written beside every
+// mark, so color never has to carry a task's identity alone.
+export const STYLE = {
+  barShapes: [['rounded', 'מעוגל'], ['square', 'מרובע'], ['pill', 'קפסולה'], ['arrow', 'חץ']],
+  markShapes: [['diamond', 'מעוין'], ['circle', 'עיגול'], ['square', 'ריבוע'], ['triangle', 'משולש'], ['star', 'כוכב']],
+  colors: [['blue', 'כחול'], ['orange', 'כתום'], ['aqua', 'טורקיז'], ['yellow', 'צהוב'], ['magenta', 'ורוד'], ['green', 'ירוק'], ['violet', 'סגול'], ['red', 'אדום']],
+  emphasis: [['bold', 'שם מודגש'], ['marker', 'מרקר על השם'], ['frame', 'מסגרת עבה'], ['large', 'גדול יותר'], ['solid', 'מילוי מלא']],
 };
 
 export const ROW_H = 28;
@@ -123,6 +138,48 @@ function diamond(cx, cy, r) {
   return `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`;
 }
 
+function star(cx, cy, r) {
+  const points = [];
+  for (let i = 0; i < 10; i++) {
+    const radius = i % 2 ? r * 0.45 : r * 1.15;
+    const angle = (-Math.PI / 2) + ((i * Math.PI) / 5);
+    points.push(`${(cx + radius * Math.cos(angle)).toFixed(2)},${(cy + radius * Math.sin(angle)).toFixed(2)}`);
+  }
+  return points.join(' ');
+}
+
+export function markShape(shape, cx, cy, r, attrs) {
+  if (shape === 'circle') return s('circle', { cx, cy, r, ...attrs });
+  if (shape === 'square') {
+    const side = r * 0.85;
+    return s('rect', { x: cx - side, y: cy - side, width: side * 2, height: side * 2, rx: 1, ...attrs });
+  }
+  if (shape === 'triangle') {
+    return s('polygon', { points: `${cx},${cy - r} ${cx + r},${cy + r * 0.8} ${cx - r},${cy + r * 0.8}`, ...attrs });
+  }
+  if (shape === 'star') return s('polygon', { points: star(cx, cy, r), ...attrs });
+  return s('polygon', { points: diamond(cx, cy, r), ...attrs });
+}
+
+// An arrow points toward later dates, whichever way the chart runs.
+export function barShape(L, shape, x, y, w, h, attrs) {
+  if (shape === 'arrow') {
+    const tip = Math.min(h / 2, w / 2);
+    const mid = y + h / 2;
+    const right = x + w;
+    const points = L.sign > 0
+      ? `${x},${y} ${right - tip},${y} ${right},${mid} ${right - tip},${y + h} ${x},${y + h}`
+      : `${right},${y} ${x + tip},${y} ${x},${mid} ${x + tip},${y + h} ${right},${y + h}`;
+    return s('polygon', { points, ...attrs });
+  }
+  const rx = shape === 'square' ? 0 : shape === 'pill' ? h / 2 : 4;
+  return s('rect', { x, y, width: w, height: h, rx: Math.min(rx, w / 2), ...attrs });
+}
+
+const hasEmphasis = (t, key) => (t.emphasis || []).includes(key);
+const labelWeight = (t, normal = 500) => (hasEmphasis(t, 'bold') ? 800 : normal);
+const markSize = (t) => (t.type === 'gate' ? 8 : 7) + (hasEmphasis(t, 'large') ? 3 : 0);
+
 // Writes a name beside its mark, on the later-in-time side unless it would run
 // off the chart. `early` and `late` are the mark's two edges in chart x.
 let measurer;
@@ -136,8 +193,8 @@ function textWidth(text) {
   return measurer.measureText(text).width + 2;
 }
 
-function labelBox(L, text, early, late) {
-  const estimate = textWidth(text);
+function labelBox(L, text, early, late, weight = 500) {
+  const estimate = textWidth(text) * (weight >= 700 ? 1.08 : 1);
   let extendsLeft = L.sign < 0;
   const edge = () => (extendsLeft ? Math.min(early, late) - 6 : Math.max(early, late) + 6);
   const overflows = () => (extendsLeft ? edge() - estimate < 0 : edge() + estimate > L.width);
@@ -150,14 +207,20 @@ function labelBox(L, text, early, late) {
   return { x, centered, extendsLeft, from, to: from + estimate };
 }
 
-function drawLabel(g, L, text, early, late, y, P, weight) {
-  const box = labelBox(L, text, early, late);
+function drawLabel(g, L, text, early, late, y, P, weight, marker) {
+  const box = labelBox(L, text, early, late, weight);
   const rtl = L.lang === 'he';
+  if (marker) {
+    g.append(s('rect', {
+      x: box.from - 3, y: y - 12, width: box.to - box.from + 6, height: 16, rx: 3, fill: P.marker, 'pointer-events': 'none',
+    }));
+  }
   g.append(s('text', {
     x: box.x, y, 'font-size': 11.5, 'font-weight': weight, fill: P.ink,
     direction: rtl ? 'rtl' : 'ltr',
     'text-anchor': box.centered ? 'middle' : box.extendsLeft === rtl ? 'start' : 'end',
-    stroke: P.surface, 'stroke-width': box.centered ? 7 : 3, 'paint-order': 'stroke', 'pointer-events': 'none',
+    ...(marker ? {} : { stroke: P.surface, 'stroke-width': box.centered ? 7 : 3, 'paint-order': 'stroke' }),
+    'pointer-events': 'none',
   }, text));
 }
 
@@ -172,11 +235,12 @@ function milestoneText(t, r, L) {
 function footprint(t, r, L) {
   if (isMilestone(t)) {
     const cx = L.x(r.end + 0.5);
-    const box = labelBox(L, milestoneText(t, r, L), cx - 8, cx + 8);
-    return [Math.min(cx - 13, box.from), Math.max(cx + 13, box.to)];
+    const size = markSize(t);
+    const box = labelBox(L, milestoneText(t, r, L), cx - size - 1, cx + size + 1, labelWeight(t));
+    return [Math.min(cx - size - 6, box.from - 3), Math.max(cx + size + 6, box.to + 3)];
   }
   const { left, width } = span(L, r.start, r.end);
-  const box = labelBox(L, taskName(t, L.lang), left, left + width);
+  const box = labelBox(L, taskName(t, L.lang), left, left + width, labelWeight(t, 400));
   return [Math.min(left, box.from), Math.max(left + width, box.to)];
 }
 
@@ -251,51 +315,51 @@ export function layoutRows(doc, sched, L, layout, { match = () => true, collapse
 function drawMilestone(g, L, t, r, y, P, late, selected) {
   const cx = L.x(r.end + 0.5);
   const cy = y + ROW_H / 2;
-  const size = t.type === 'gate' ? 8 : 7;
-  const color = t.type === 'milestone' ? (P.tracks[t.track] || P.ink2) : P.ink;
+  const size = markSize(t);
+  const color = (t.color && P.named[t.color]) || (t.type === 'milestone' ? (P.tracks[t.track] || P.ink2) : P.ink);
   const hollow = t.unverified || t.decision;
+  const faded = t.status === 'done' && !t.color;
   const part = s('g', { dataset: { task: t.id, part: 'bar' }, class: 'bar' });
-  part.append(s('rect', { x: cx - 13, y, width: 26, height: ROW_H, fill: 'transparent' }));
-  if (late) part.append(s('polygon', { points: diamond(cx, cy, size + 3), fill: 'none', stroke: P.critical, 'stroke-width': 2 }));
-  part.append(s('polygon', {
-    points: diamond(cx, cy, size),
-    fill: hollow ? P.surface : t.status === 'done' ? P.muted : color,
-    stroke: t.status === 'done' ? P.muted : color,
+  part.append(s('rect', { x: cx - size - 6, y, width: (size + 6) * 2, height: ROW_H, fill: 'transparent' }));
+  if (late) part.append(markShape(t.shape, cx, cy, size + 3, { fill: 'none', stroke: P.critical, 'stroke-width': 2 }));
+  part.append(markShape(t.shape, cx, cy, size, {
+    fill: hollow ? P.surface : faded ? P.muted : color,
+    stroke: faded ? P.muted : color,
     'stroke-width': 2,
   }));
-  if (t.type === 'gate') part.append(s('polygon', { points: diamond(cx, cy, 3), fill: hollow ? color : P.surface }));
-  if (selected) part.append(s('polygon', { points: diamond(cx, cy, size + 5), fill: 'none', stroke: P.ink, 'stroke-width': 1.5 }));
+  if (t.type === 'gate') part.append(markShape(t.shape, cx, cy, 3, { fill: hollow ? color : P.surface }));
+  if (hasEmphasis(t, 'frame')) part.append(markShape(t.shape, cx, cy, size + 2, { fill: 'none', stroke: P.ink, 'stroke-width': 2.5 }));
+  if (selected) part.append(markShape(t.shape, cx, cy, size + 5, { fill: 'none', stroke: P.ink, 'stroke-width': 1.5 }));
   g.append(part);
-  drawLabel(g, L, milestoneText(t, r, L), cx - 8, cx + 8, cy + 4, P, 500);
+  drawLabel(g, L, milestoneText(t, r, L), cx - size - 1, cx + size + 1, cy + 4, P, labelWeight(t), hasEmphasis(t, 'marker'));
 }
 
 function drawBar(g, L, t, r, y, P, opts, critical) {
   const { left, width } = span(L, r.start, r.end);
-  const color = P.tracks[t.track] || P.tracks.docs;
-  const top = y + 7;
-  const height = ROW_H - 14;
+  const color = (t.color && P.named[t.color]) || P.tracks[t.track] || P.tracks.docs;
+  const large = hasEmphasis(t, 'large');
+  const top = y + (large ? 4 : 7);
+  const height = ROW_H - (large ? 8 : 14);
+  const shape = (x, yy, w, hh, attrs) => barShape(L, t.shape, x, yy, w, hh, attrs);
   const part = s('g', { dataset: { task: t.id, part: 'bar' }, class: 'bar' });
   part.append(s('rect', { x: left - 2, y: y + 2, width: width + 4, height: ROW_H - 4, fill: 'transparent' }));
   const done = t.status === 'done';
-  part.append(s('rect', {
-    x: left, y: top, width, height, rx: 4, fill: color, 'fill-opacity': done ? 0.45 : 0.3, stroke: color,
+  part.append(shape(left, top, width, height, {
+    fill: color, 'fill-opacity': hasEmphasis(t, 'solid') ? 1 : done ? 0.45 : 0.3, stroke: color,
     'stroke-width': 1, 'stroke-dasharray': t.decision ? '3 2' : undefined,
   }));
   const pct = done ? 0 : Math.min(Math.max(t.progress || 0, 0), 100) / 100;
   if (pct > 0) {
     const w = width * pct;
-    part.append(s('rect', { x: L.sign > 0 ? left : left + width - w, y: top, width: w, height, rx: 4, fill: color }));
+    part.append(shape(L.sign > 0 ? left : left + width - w, top, w, height, { fill: color }));
   }
-  if (t.external) part.append(s('rect', { x: left, y: top, width, height, rx: 4, fill: 'url(#hatch)' }));
+  if (t.external) part.append(shape(left, top, width, height, { fill: 'url(#hatch)' }));
+  if (hasEmphasis(t, 'frame')) part.append(shape(left, top, width, height, { fill: 'none', stroke: P.ink, 'stroke-width': 2.5 }));
   if (critical) {
-    part.append(s('rect', {
-      x: left - 1, y: top - 1, width: width + 2, height: height + 2, rx: 5, fill: 'none', stroke: P.critical, 'stroke-width': 2,
-    }));
+    part.append(shape(left - 1, top - 1, width + 2, height + 2, { fill: 'none', stroke: P.critical, 'stroke-width': 2 }));
   }
   if (opts.selected === t.id) {
-    part.append(s('rect', {
-      x: left - 3, y: top - 3, width: width + 6, height: height + 6, rx: 6, fill: 'none', stroke: P.ink, 'stroke-width': 1.5,
-    }));
+    part.append(shape(left - 3, top - 3, width + 6, height + 6, { fill: 'none', stroke: P.ink, 'stroke-width': 1.5 }));
   }
   if (done && width > 16) {
     part.append(s('text', {
@@ -309,7 +373,7 @@ function drawBar(g, L, t, r, y, P, opts, critical) {
     }));
   }
   g.append(part);
-  drawLabel(g, L, taskName(t, L.lang), left, left + width, y + (ROW_H / 2) + 4, P, 400);
+  drawLabel(g, L, taskName(t, L.lang), left, left + width, y + (ROW_H / 2) + 4, P, labelWeight(t, 400), hasEmphasis(t, 'marker'));
 }
 
 const rowTasks = (row) => (row.kind === 'task' ? [row.task] : row.items || []);

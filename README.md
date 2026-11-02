@@ -71,4 +71,5 @@ node dev/e2e.mjs
 | `unverified`, `decision` | תאריך לא מאומת, החלטה פתוחה |
 | `criteria`, `criteriaDone` | תנאי מעבר או סיום |
 | `issue` | מספר Issue בריפו הפרטי |
+| `shape`, `color`, `emphasis` | עיצוב אופציונלי. הערכים מוגדרים ב-`STYLE` בתוך `js/gantt.js` |
 | `note` | הערות |

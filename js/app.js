@@ -528,7 +528,7 @@ function renderLegend() {
   const bars = tasks.filter((t) => !isMilestone(t));
   const item = (cls, label) => h('span', {}, h('i', { class: `swatch ${cls}` }), label);
   const tracks = [['hw', 'חומרה'], ['fw', 'קושחה'], ['veh', 'רכב'], ['docs', 'מסמכים']]
-    .filter(([key]) => bars.some((t) => t.track === key));
+    .filter(([key]) => bars.some((t) => t.track === key && !t.color));
   return h('div', { class: 'legend' },
     tracks.map(([key, label]) => item(key, label)),
     bars.some((t) => t.external) && item('ext', 'תלוי בגורם חיצוני'),
@@ -537,6 +537,12 @@ function renderLegend() {
     tasks.some((t) => isMilestone(t) && t.unverified) && item('dia open', 'מועד לא מאומת'),
     (state.doc.blackouts || []).length > 0 && item('band', 'תקופה חסומה'),
     h('span', { class: 'hint' }, 'לחיצה על שורה פותחת עריכה. גרירה בתרשים מזיזה את התאריך.'));
+}
+
+function colorDot(key) {
+  const dot = h('i', { class: 'color-dot' });
+  dot.style.background = PALETTES[themeName()].named[key] || 'transparent';
+  return dot;
 }
 
 function statusCell(t) {
@@ -612,7 +618,11 @@ function renderTableRow(row) {
   },
   h('span', { class: 'c-name' },
     isMilestone(t) && h('span', { 'aria-hidden': 'true' }, '◆'),
-    h('span', { class: 'label', title: taskName(t, state.prefs.lang) }, taskName(t, state.prefs.lang)),
+    t.color && colorDot(t.color),
+    h('span', {
+      class: `label ${(t.emphasis || []).includes('bold') ? 'strong' : ''} ${(t.emphasis || []).includes('marker') ? 'marked' : ''}`,
+      title: taskName(t, state.prefs.lang),
+    }, taskName(t, state.prefs.lang)),
     t.decision && h('span', { class: 'tag q' }, 'החלטה'),
     t.unverified && h('span', { class: 'tag q' }, 'לא מאומת'),
     t.issue && h('span', { class: 'tag issue' }, `Issue ${t.issue}${issue?.state === 'closed' ? ' סגור' : ''}`)),
