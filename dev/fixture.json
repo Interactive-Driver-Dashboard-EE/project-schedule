@@ -1,0 +1,26 @@
+{
+ "version": 1,
+ "title": "Demo schedule",
+ "projectStart": "2027-01-03",
+ "settings": { "criticalDays": 7 },
+ "people": [
+  { "id": "p1", "name": "Alex" },
+  { "id": "p2", "name": "Sam" }
+ ],
+ "phases": [
+  { "id": "a", "name": "Design" },
+  { "id": "b", "name": "Build" }
+ ],
+ "blackouts": [
+  { "id": "x", "name": "Exams", "short": "Exams", "start": "2027-02-01", "end": "2027-02-14", "appliesTo": "all" }
+ ],
+ "baselines": [],
+ "tasks": [
+  { "id": "T001", "name": "Schematic", "phase": "a", "track": "hw", "owner": "p1", "type": "task", "status": "doing", "progress": 40, "duration": 14, "deps": [] },
+  { "id": "T002", "name": "Firmware prototype", "phase": "a", "track": "fw", "owner": "p2", "type": "task", "status": "todo", "duration": 20, "deps": [] },
+  { "id": "T003", "name": "Design review", "phase": "a", "track": "docs", "owner": "both", "type": "gate", "fixed": "2027-01-31", "status": "todo", "deps": [{ "id": "T001" }, { "id": "T002" }] },
+  { "id": "T004", "name": "Fabrication", "phase": "b", "track": "veh", "owner": "both", "type": "task", "external": true, "status": "todo", "duration": 21, "deps": [{ "id": "T003" }] },
+  { "id": "T005", "name": "Bring-up", "phase": "b", "track": "hw", "owner": "p1", "type": "task", "status": "todo", "duration": 10, "deps": [{ "id": "T004" }] },
+  { "id": "T006", "name": "Report due", "phase": "b", "track": "docs", "owner": "both", "type": "deadline", "fixed": "2027-04-01", "status": "todo", "deps": [{ "id": "T005" }] }
+ ]
+}
