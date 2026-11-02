@@ -1,10 +1,10 @@
 import { apiBase, TOKEN_URL, DATA } from './config.js';
 import { clear, download, h, s } from './dom.js';
 import { buildExportSvg, downloadPng } from './export.js';
-import { buildLayout, drawBody, drawHeader, HEAD_H, PALETTES, ROW_H } from './gantt.js';
+import { buildLayout, drawBody, drawHeader, HEAD_H, layoutRows, PALETTES, ROW_H } from './gantt.js';
 import { Store, StoreError } from './github.js';
 import {
-  durationForEnd, findIssues, isMilestone, mergeDocs, rollup, schedule, takeBaseline, toDay, toIso, validateDoc, weekSummary,
+  durationForEnd, findIssues, isMilestone, mergeDocs, schedule, takeBaseline, toDay, toIso, validateDoc, weekSummary,
 } from './model.js';
 import { phaseName, taskName, toMspdi } from './mspdi.js';
 import { renderSettings, renderTaskDrawer } from './panels.js';
@@ -23,7 +23,7 @@ const storage = {
 
 function loadPrefs() {
   const defaults = {
-    zoom: 'all', lang: 'he', showDeps: true, showCritical: true, showBaseline: false, theme: 'auto', collapsed: [], owner: '', track: '', query: '', tab: 'gantt',
+    zoom: 'all', layout: 'heading', lang: 'he', showDeps: true, showCritical: true, showBaseline: false, theme: 'auto', collapsed: [], owner: '', track: '', query: '', tab: 'gantt',
   };
   try { return { ...defaults, ...JSON.parse(storage.get(PREFS_KEY) || '{}') }; } catch { return defaults; }
 }
@@ -274,18 +274,13 @@ function matches(t) {
   return true;
 }
 
-function visibleRows() {
-  const rows = [];
-  const filtering = state.prefs.owner || state.prefs.track || state.prefs.query;
-  for (const phase of state.doc.phases) {
-    const kids = state.doc.tasks.filter((t) => t.phase === phase.id && matches(t));
-    if (filtering && !kids.length) continue;
-    const roll = rollup(state.doc, state.sched, phase.id);
-    rows.push({ kind: 'phase', phase, roll });
-    if (state.prefs.collapsed.includes(phase.id)) continue;
-    for (const t of kids) rows.push({ kind: 'task', task: t });
-  }
-  return rows;
+// Without a chart layout yet, this gives the plain list, used to size the table.
+function visibleRows(L) {
+  return layoutRows(state.doc, state.sched, L, L ? state.prefs.layout : 'list', {
+    match: matches,
+    collapsed: state.prefs.collapsed,
+    filtering: !!(state.prefs.owner || state.prefs.track || state.prefs.query),
+  });
 }
 
 function currentBaseline() {
@@ -396,6 +391,11 @@ function renderToolbar() {
     nodes.undoBtn, nodes.redoBtn, nodes.saveBtn,
     p.tab === 'gantt' && h('span', { class: 'field-inline' }, 'תצוגה',
       h('div', { class: 'tabs' }, zoom('week', 'שבועות'), zoom('month', 'חודשים'), zoom('all', 'כל השנה'))),
+    p.tab === 'gantt' && h('span', { class: 'field-inline' }, 'פריסה',
+      h('div', { class: 'tabs' },
+        [['heading', 'לפי כותרות'], ['together', 'הכול יחד'], ['list', 'שורה לכל משימה']].map(([key, label]) => h('button', {
+          'aria-pressed': String(p.layout === key), onclick: () => setPref('layout', key),
+        }, label)))),
     p.tab === 'gantt' && h('button', { class: 'btn', onclick: () => scrollToDay(toDay(todayIso())) }, 'להיום'),
     h('label', { class: 'field-inline' }, 'אחראי',
       h('select', { onchange: (e) => setPref('owner', e.target.value) },
@@ -446,6 +446,7 @@ function exportOptions(lang) {
     todayDay: toDay(todayIso()),
     criticalDays: state.doc.settings?.criticalDays ?? 7,
     lateMilestones: lateMilestones(),
+    layout: state.prefs.layout,
   };
 }
 
@@ -547,11 +548,14 @@ function statusCell(t) {
 // The name column is as wide as the longest name, so nothing is cut off, up to a
 // limit that leaves room for the chart. Longer names wrap onto a second line.
 function nameColumnWidth(rows) {
-  if (innerWidth <= 900) return 170;
+  const { layout } = state.prefs;
+  if (layout === 'together') return 0;
+  if (innerWidth <= 900) return layout === 'heading' ? 96 : 170;
   const ctx = document.createElement('canvas').getContext('2d');
   ctx.font = '700 14px system-ui, -apple-system, "Segoe UI", Arial, sans-serif';
   let widest = 120;
   for (const row of rows) {
+    if (layout === 'heading' && row.kind !== 'phase') continue;
     const t = row.task;
     const text = row.kind === 'phase' ? phaseName(row.phase, state.prefs.lang) : taskName(t, state.prefs.lang);
     let w = ctx.measureText(text).width + 34;
@@ -561,6 +565,19 @@ function nameColumnWidth(rows) {
     widest = Math.max(widest, w);
   }
   return Math.ceil(Math.min(widest, innerWidth * 0.36));
+}
+
+function renderTableRows(rows) {
+  const out = [];
+  for (const row of rows) {
+    if (row.kind === 'phase' || row.kind === 'task') out.push(renderTableRow(row));
+    else if (row.first) {
+      const el = renderTableRow({ kind: 'phase', phase: row.phase, roll: row.roll });
+      el.style.height = `${row.count * ROW_H}px`;
+      out.push(el);
+    }
+  }
+  return out;
 }
 
 function renderTableRow(row) {
@@ -619,7 +636,7 @@ function setHover(rowEl, id) {
 function pixelsPerDay(nameW) {
   if (state.prefs.zoom !== 'all') return ZOOMS[state.prefs.zoom];
   const phone = innerWidth <= 900;
-  const table = nameW + (phone ? 0 : 220);
+  const table = nameW + (phone || state.prefs.layout !== 'list' ? 0 : 220);
   const panel = state.panel && !phone ? 380 : 0;
   const days = state.sched.projectEnd - state.sched.projectStart + 29;
   return Math.max(ZOOMS.all, (innerWidth - table - panel - 18) / days);
@@ -628,9 +645,9 @@ function pixelsPerDay(nameW) {
 function renderGantt() {
   const prefs = state.prefs;
   const P = PALETTES[themeName()];
-  const rows = visibleRows();
-  const nameW = nameColumnWidth(rows);
+  const nameW = nameColumnWidth(visibleRows());
   const L = buildLayout(state.doc, state.sched, { ppd: pixelsPerDay(nameW), lang: prefs.lang });
+  const rows = visibleRows(L);
   const todayDay = toDay(todayIso());
   const body = drawBody(L, state.doc, state.sched, rows, P, {
     showDeps: prefs.showDeps,
@@ -640,9 +657,10 @@ function renderGantt() {
     todayDay,
     lateMilestones: lateMilestones(),
     interactive: true,
+    selected: state.selected,
   });
   nodes.hover = body.hover;
-  nodes.rowIndex = new Map(rows.map((row, i) => [row.kind === 'task' ? row.task.id : `p:${row.phase.id}`, i]));
+  nodes.rowIndex = new Map(rows.filter((row) => row.kind === 'task').map((row) => [row.task.id, rows.indexOf(row)]));
   nodes.layout = L;
 
   const head = s('svg', { class: 'head-svg', width: L.width, height: HEAD_H, role: 'img', 'aria-label': 'ציר זמן' });
@@ -658,15 +676,15 @@ function renderGantt() {
   svg.addEventListener('pointermove', onChartHover);
   svg.addEventListener('pointerleave', hideTooltip);
 
-  const tbody = h('div', { class: 'tbody' }, rows.map(renderTableRow));
+  const tbody = h('div', { class: 'tbody' }, renderTableRows(rows));
   nodes.tbody = tbody;
   const th = h('div', { class: 'th' },
-    h('span', { class: 'c-name' }, 'שם'),
+    h('span', { class: 'c-name' }, prefs.layout === 'list' ? 'שם' : 'כותרת'),
     h('span', { class: 'c-status' }, 'סטטוס'),
     h('span', { class: 'c-owner' }, 'אחראי'),
     h('span', { class: 'c-dates' }, 'תאריכים'),
     h('span', { class: 'c-slack' }, 'מרווח בימים'));
-  const grid = h('div', { class: `gantt ${prefs.lang === 'en' ? 'ltr' : ''}` }, th, head, tbody, svg);
+  const grid = h('div', { class: `gantt ${prefs.lang === 'en' ? 'ltr' : ''} ${prefs.layout}` }, th, head, tbody, svg);
   grid.style.setProperty('--name-w', `${nameW}px`);
   return grid;
 }
@@ -787,7 +805,7 @@ function redrawGantt() {
   const prefs = state.prefs;
   const P = PALETTES[themeName()];
   const L = nodes.layout;
-  const rows = visibleRows();
+  const rows = visibleRows(L);
   const body = drawBody(L, state.doc, state.sched, rows, P, {
     showDeps: prefs.showDeps,
     showCritical: prefs.showCritical,
@@ -796,11 +814,13 @@ function redrawGantt() {
     todayDay: toDay(todayIso()),
     lateMilestones: lateMilestones(),
     interactive: true,
+    selected: state.selected,
   });
   nodes.hover = body.hover;
+  nodes.svg.setAttribute('height', body.height);
   nodes.svg.replaceChildren(body.node);
   const tbody = nodes.tbody;
-  tbody.replaceChildren(...rows.map(renderTableRow));
+  tbody.replaceChildren(...renderTableRows(rows));
   nodes.svg.classList.add('dragging');
 }
 

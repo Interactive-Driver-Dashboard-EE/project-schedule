@@ -1,5 +1,5 @@
 import { s, download } from './dom.js';
-import { buildLayout, drawBody, drawHeader, HEAD_H, PALETTES, ROW_H } from './gantt.js';
+import { buildLayout, drawBody, drawHeader, HEAD_H, layoutRows, PALETTES, ROW_H } from './gantt.js';
 import { isMilestone, toIso } from './model.js';
 import { phaseName, taskName } from './mspdi.js';
 
@@ -10,18 +10,12 @@ const dd = (day) => {
 
 // One self-contained SVG with the task list and chart, always in light colors,
 // used for both the image download and printing.
-export function buildExportSvg(doc, sched, { lang, baseline, todayDay, criticalDays, lateMilestones }) {
+export function buildExportSvg(doc, sched, { lang, baseline, todayDay, criticalDays, lateMilestones, layout }) {
   const P = PALETTES.light;
-  const rows = [];
-  for (const phase of doc.phases) {
-    const kids = doc.tasks.filter((t) => t.phase === phase.id && sched.rows.has(t.id));
-    if (!kids.length) continue;
-    const rs = kids.map((t) => sched.rows.get(t.id));
-    rows.push({ kind: 'phase', phase, roll: { start: Math.min(...rs.map((r) => r.start)), end: Math.max(...rs.map((r) => r.end)) } });
-    for (const t of kids) rows.push({ kind: 'task', task: t });
-  }
   const L = buildLayout(doc, sched, { ppd: 4, lang });
-  const tableW = 420;
+  const rows = layoutRows(doc, sched, L, layout, { filtering: true });
+  const compact = layout !== 'list';
+  const tableW = layout === 'together' ? 0 : compact ? 220 : 420;
   const titleH = 44;
   const legendH = 28;
   const body = drawBody(L, doc, sched, rows, P, {
@@ -50,16 +44,24 @@ export function buildExportSvg(doc, sched, { lang, baseline, todayDay, criticalD
   chart.append(bodyWrap);
   svg.append(chart);
 
-  const table = s('g', { transform: `translate(${he ? L.width : 0} ${titleH})` });
+  const table = s('g', { transform: `translate(${he ? L.width : 0} ${titleH})`, display: tableW ? undefined : 'none' });
   table.append(s('rect', { width: tableW, height: HEAD_H + body.height, fill: P.surface }));
   const nameX = he ? tableW - 10 : 10;
   const dateX = he ? 8 : tableW - 8;
   const dateAnchor = he ? 'start' : 'end';
-  table.append(s('text', { x: nameX, y: 32, 'font-size': 12, 'font-weight': 600, fill: P.ink2, 'text-anchor': anchor }, he ? 'משימה' : 'Task'));
-  table.append(s('text', { x: dateX, y: 32, 'font-size': 12, 'font-weight': 600, fill: P.ink2, 'text-anchor': dateAnchor }, he ? 'תאריכים' : 'Dates'));
+  table.append(s('text', { x: nameX, y: 32, 'font-size': 12, 'font-weight': 600, fill: P.ink2, 'text-anchor': anchor }, compact ? (he ? 'כותרת' : 'Heading') : (he ? 'משימה' : 'Task')));
+  if (!compact) table.append(s('text', { x: dateX, y: 32, 'font-size': 12, 'font-weight': 600, fill: P.ink2, 'text-anchor': dateAnchor }, he ? 'תאריכים' : 'Dates'));
   table.append(s('line', { x1: 0, x2: tableW, y1: HEAD_H, y2: HEAD_H, stroke: P.axis }));
   rows.forEach((row, i) => {
     const y = HEAD_H + (i * ROW_H) + 20;
+    if (row.kind === 'lane' || row.kind === 'heads') {
+      if (row.first) table.append(s('text', { x: nameX, y, 'font-size': 12, 'font-weight': 700, fill: P.ink, 'text-anchor': anchor }, phaseName(row.phase, lang)));
+      if (row.last) {
+        const lane = HEAD_H + ((i + 1) * ROW_H);
+        table.append(s('line', { x1: 0, x2: tableW, y1: lane, y2: lane, stroke: P.grid }));
+      }
+      return;
+    }
     const isPhase = row.kind === 'phase';
     const name = isPhase ? phaseName(row.phase, lang) : taskName(row.task, lang);
     table.append(s('text', {

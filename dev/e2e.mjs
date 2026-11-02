@@ -139,6 +139,9 @@ try {
   await send('Log.enable');
   await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   await openPage();
+  // Most steps read per-task table rows, so they run in the one-task-per-row layout.
+  await evaluate(`localStorage.setItem('schedule.prefs', JSON.stringify({ layout: 'list' }))`);
+  await openPage();
 
   await step('page renders from the mock API', async () => {
     assert.ok(await evaluate(`document.querySelectorAll('.row').length`) > 5);
@@ -255,6 +258,56 @@ try {
     }
     for (const p of doc.phases) assert.ok(chart.includes(p.name), `chart should show ${p.name}`);
     assert.match(table, /לא התחיל/);
+  });
+
+  const layoutCheck = () => evaluate(`(() => {
+      const svg = document.querySelector('.body-svg');
+      const rows = Math.round(svg.getAttribute('height') / 28);
+      const boxes = [...svg.querySelectorAll('text')].map((t) => ({ text: t.textContent, ...t.getBoundingClientRect().toJSON() }));
+      const clashes = [];
+      boxes.forEach((a, i) => boxes.slice(i + 1).forEach((b) => {
+        const sameRow = Math.abs(a.y - b.y) < 8;
+        if (sameRow && a.left < b.right && b.left < a.right) clashes.push(a.text + ' / ' + b.text);
+      }));
+      return { rows, clashes, texts: boxes.map((b) => b.text).join('|'), headings: document.querySelector('.tbody').innerText };
+    })()`);
+
+  await step('the layout by headings shares rows without names touching', async () => {
+    await clickButton('לפי כותרות');
+    await sleep(150);
+    const doc = (await mockState()).doc;
+    const check = await layoutCheck();
+    assert.ok(check.rows < doc.tasks.length, `expected fewer rows than ${doc.tasks.length} tasks, got ${check.rows}`);
+    assert.deepEqual(check.clashes, []);
+    for (const t of doc.tasks) assert.ok(check.texts.includes(t.name), `chart should show ${t.name}`);
+    for (const p of doc.phases) assert.ok(check.headings.includes(p.name), `table should show ${p.name}`);
+    await shot('12-compact');
+    const target = doc.tasks.find((t) => t.type === 'task' && t.status === 'todo');
+    const r = await barRect(target.id);
+    await click(r.x, r.y);
+    assert.ok(await evaluate(`!!document.querySelector('.drawer')`), 'clicking a mark opens the panel');
+    await evaluate(`document.querySelector('.drawer .icon-btn').click()`);
+    const before = await evaluate(`document.querySelector('[data-task="${target.id}"]').getBoundingClientRect().x`);
+    const r2 = await barRect(target.id);
+    await drag(r2.x, r2.y, r2.x - 60, r2.y);
+    assert.notEqual(await evaluate(`document.querySelector('[data-task="${target.id}"]').getBoundingClientRect().x`), before, 'dragging still moves a mark');
+    await clickButton('ביטול');
+  });
+
+  await step('the all-together layout uses the fewest rows and still writes every name', async () => {
+    const byHeading = (await layoutCheck()).rows;
+    await clickButton('הכול יחד');
+    await sleep(150);
+    const doc = (await mockState()).doc;
+    const check = await layoutCheck();
+    assert.ok(check.rows <= byHeading + 1, `expected about ${byHeading} rows, got ${check.rows}`);
+    assert.deepEqual(check.clashes, []);
+    for (const t of doc.tasks) assert.ok(check.texts.includes(t.name), `chart should show ${t.name}`);
+    for (const p of doc.phases) assert.ok(check.texts.includes(p.name), `chart should show ${p.name}`);
+    console.log(`   ${doc.tasks.length} tasks: ${byHeading} rows by heading, ${check.rows} rows all together`);
+    await shot('13-together');
+    await clickButton('שורה לכל משימה');
+    await sleep(150);
   });
 
   await step('a heading can be added by name', async () => {

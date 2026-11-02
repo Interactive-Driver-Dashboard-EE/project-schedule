@@ -142,11 +142,14 @@ input[type="search"] { width: 120px; }
 .body-svg .handle { cursor: ew-resize; }
 .body-svg.dragging, .body-svg.dragging * { cursor: grabbing !important; }
 
-.row { height: 32px; display: flex; align-items: center; border-bottom: 1px solid color-mix(in srgb, var(--grid) 60%, transparent); width: 100%; background: none; border-inline: 0; border-top: 0; padding: 0; text-align: start; cursor: pointer; }
+.row { height: 28px; display: flex; align-items: center; border-bottom: 1px solid color-mix(in srgb, var(--grid) 60%, transparent); width: 100%; background: none; border-inline: 0; border-top: 0; padding: 0; text-align: start; cursor: pointer; }
 .row:hover, .row.hl { background: var(--wash); }
 .row.sel { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .row.phase { font-weight: 700; }
 .c-name { flex: none; width: var(--name-w); display: flex; align-items: center; gap: 5px; padding-inline: 8px 6px; overflow: hidden; }
+.gantt.heading .c-status, .gantt.heading .c-owner, .gantt.heading .c-dates, .gantt.heading .c-slack { display: none; }
+.gantt.together { grid-template-columns: max-content; }
+.gantt.together .th, .gantt.together .tbody { display: none; }
 .c-status { flex: none; width: 72px; font-size: 12px; color: var(--ink2); white-space: nowrap; }
 .row.task .c-name { padding-inline-start: 22px; }
 .c-name .label { overflow: hidden; line-height: 14px; max-height: 29px; }

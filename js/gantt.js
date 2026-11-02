@@ -1,5 +1,5 @@
 import { s } from './dom.js';
-import { isMilestone, toDay, toIso } from './model.js';
+import { isMilestone, rollup, toDay, toIso } from './model.js';
 import { phaseName, taskName } from './mspdi.js';
 
 // Hues come from a validated categorical order: its first three slots hold up
@@ -19,7 +19,7 @@ export const PALETTES = {
   },
 };
 
-export const ROW_H = 32;
+export const ROW_H = 28;
 export const HEAD_H = 46;
 
 export function buildLayout(doc, sched, { ppd, lang }) {
@@ -125,8 +125,19 @@ function diamond(cx, cy, r) {
 
 // Writes a name beside its mark, on the later-in-time side unless it would run
 // off the chart. `early` and `late` are the mark's two edges in chart x.
-function drawLabel(g, L, text, early, late, y, P, weight) {
-  const estimate = text.length * 6.4;
+let measurer;
+
+function textWidth(text) {
+  if (typeof document === 'undefined') return text.length * 6;
+  if (!measurer) {
+    measurer = document.createElement('canvas').getContext('2d');
+    measurer.font = '500 11.5px system-ui, -apple-system, "Segoe UI", Arial, sans-serif';
+  }
+  return measurer.measureText(text).width + 2;
+}
+
+function labelBox(L, text, early, late) {
+  const estimate = textWidth(text);
   let extendsLeft = L.sign < 0;
   const edge = () => (extendsLeft ? Math.min(early, late) - 6 : Math.max(early, late) + 6);
   const overflows = () => (extendsLeft ? edge() - estimate < 0 : edge() + estimate > L.width);
@@ -134,16 +145,110 @@ function drawLabel(g, L, text, early, late, y, P, weight) {
   // A mark spanning the whole chart leaves no room on either side, so the name
   // goes over its middle instead.
   const centered = overflows();
+  const x = centered ? (early + late) / 2 : edge();
+  const from = centered ? x - estimate / 2 : extendsLeft ? x - estimate : x;
+  return { x, centered, extendsLeft, from, to: from + estimate };
+}
+
+function drawLabel(g, L, text, early, late, y, P, weight) {
+  const box = labelBox(L, text, early, late);
   const rtl = L.lang === 'he';
   g.append(s('text', {
-    x: centered ? (early + late) / 2 : edge(), y, 'font-size': 11.5, 'font-weight': weight, fill: P.ink,
+    x: box.x, y, 'font-size': 11.5, 'font-weight': weight, fill: P.ink,
     direction: rtl ? 'rtl' : 'ltr',
-    'text-anchor': centered ? 'middle' : extendsLeft === rtl ? 'start' : 'end',
-    stroke: P.surface, 'stroke-width': centered ? 7 : 3, 'paint-order': 'stroke', 'pointer-events': 'none',
+    'text-anchor': box.centered ? 'middle' : box.extendsLeft === rtl ? 'start' : 'end',
+    stroke: P.surface, 'stroke-width': box.centered ? 7 : 3, 'paint-order': 'stroke', 'pointer-events': 'none',
   }, text));
 }
 
-function drawMilestone(g, L, t, r, y, P, late) {
+function milestoneText(t, r, L) {
+  const iso = toIso(r.end);
+  const date = `${iso.slice(8)}.${iso.slice(5, 7)}.${iso.slice(2, 4)}`;
+  const flag = t.unverified ? (L.lang === 'en' ? ' · unverified' : ' · לא מאומת') : '';
+  return `${taskName(t, L.lang)} · ${date}${flag}`;
+}
+
+// The stretch of chart a task takes up, including its written name.
+function footprint(t, r, L) {
+  if (isMilestone(t)) {
+    const cx = L.x(r.end + 0.5);
+    const box = labelBox(L, milestoneText(t, r, L), cx - 8, cx + 8);
+    return [Math.min(cx - 13, box.from), Math.max(cx + 13, box.to)];
+  }
+  const { left, width } = span(L, r.start, r.end);
+  const box = labelBox(L, taskName(t, L.lang), left, left + width);
+  return [Math.min(left, box.from), Math.max(left + width, box.to)];
+}
+
+// Places tasks on as few rows as possible: each goes on the first row where
+// neither its mark nor its name touches anything already there.
+function pack(entries) {
+  const lanes = [];
+  for (const { item, from, to } of entries) {
+    let lane = lanes.find((l) => l.spans.every(([a, b]) => to + 8 <= a || from - 8 >= b));
+    if (!lane) {
+      lane = { items: [], spans: [] };
+      lanes.push(lane);
+    }
+    lane.items.push(item);
+    lane.spans.push([from, to]);
+  }
+  return lanes.map((l) => l.items);
+}
+
+export function packLanes(L, sched, tasks) {
+  const ordered = tasks
+    .filter((t) => sched.rows.has(t.id))
+    .sort((a, b) => sched.rows.get(a.id).start - sched.rows.get(b.id).start);
+  return pack(ordered.map((t) => {
+    const [from, to] = footprint(t, sched.rows.get(t.id), L);
+    return { item: t, from, to };
+  }));
+}
+
+function packHeadings(L, heads) {
+  const ordered = [...heads].sort((a, b) => a.roll.start - b.roll.start);
+  return pack(ordered.map((head) => {
+    const { left, width } = span(L, head.roll.start, head.roll.end);
+    const box = labelBox(L, phaseName(head.phase, L.lang), left, left + width);
+    return { item: head, from: Math.min(left, box.from), to: Math.max(left + width, box.to) };
+  }));
+}
+
+// The visible rows for a layout:
+//   'list'     one row per task, under its heading
+//   'heading'  each heading's tasks share as few rows as possible
+//   'together' headings on top, then all tasks sharing rows regardless of heading
+export function layoutRows(doc, sched, L, layout, { match = () => true, collapsed = [], filtering = false } = {}) {
+  const rows = [];
+  const heads = [];
+  for (const phase of doc.phases) {
+    const kids = doc.tasks.filter((t) => t.phase === phase.id && match(t));
+    if (filtering && !kids.length) continue;
+    const roll = rollup(doc, sched, phase.id);
+    if (layout === 'together') {
+      if (kids.length && roll) heads.push({ phase, roll });
+      continue;
+    }
+    const closed = collapsed.includes(phase.id);
+    if (layout === 'heading' && kids.length && !closed) {
+      const lanes = packLanes(L, sched, kids);
+      lanes.forEach((items, i) => rows.push({ kind: 'lane', phase, roll, items, first: i === 0, last: i === lanes.length - 1, count: lanes.length }));
+      continue;
+    }
+    rows.push({ kind: 'phase', phase, roll });
+    if (!closed) for (const t of kids) rows.push({ kind: 'task', task: t });
+  }
+  if (layout === 'together') {
+    const headLanes = packHeadings(L, heads);
+    headLanes.forEach((items, i) => rows.push({ kind: 'heads', heads: items, last: i === headLanes.length - 1 }));
+    const lanes = packLanes(L, sched, doc.tasks.filter(match));
+    lanes.forEach((items) => rows.push({ kind: 'lane', items, last: true }));
+  }
+  return rows;
+}
+
+function drawMilestone(g, L, t, r, y, P, late, selected) {
   const cx = L.x(r.end + 0.5);
   const cy = y + ROW_H / 2;
   const size = t.type === 'gate' ? 8 : 7;
@@ -159,18 +264,16 @@ function drawMilestone(g, L, t, r, y, P, late) {
     'stroke-width': 2,
   }));
   if (t.type === 'gate') part.append(s('polygon', { points: diamond(cx, cy, 3), fill: hollow ? color : P.surface }));
+  if (selected) part.append(s('polygon', { points: diamond(cx, cy, size + 5), fill: 'none', stroke: P.ink, 'stroke-width': 1.5 }));
   g.append(part);
-  const iso = toIso(r.end);
-  const date = `${iso.slice(8)}.${iso.slice(5, 7)}.${iso.slice(2, 4)}`;
-  const flag = t.unverified ? (L.lang === 'en' ? ' · unverified' : ' · לא מאומת') : '';
-  drawLabel(g, L, `${taskName(t, L.lang)} · ${date}${flag}`, cx - size, cx + size, cy + 4, P, 500);
+  drawLabel(g, L, milestoneText(t, r, L), cx - 8, cx + 8, cy + 4, P, 500);
 }
 
 function drawBar(g, L, t, r, y, P, opts, critical) {
   const { left, width } = span(L, r.start, r.end);
   const color = P.tracks[t.track] || P.tracks.docs;
-  const top = y + 8;
-  const height = ROW_H - 16;
+  const top = y + 7;
+  const height = ROW_H - 14;
   const part = s('g', { dataset: { task: t.id, part: 'bar' }, class: 'bar' });
   part.append(s('rect', { x: left - 2, y: y + 2, width: width + 4, height: ROW_H - 4, fill: 'transparent' }));
   const done = t.status === 'done';
@@ -189,6 +292,11 @@ function drawBar(g, L, t, r, y, P, opts, critical) {
       x: left - 1, y: top - 1, width: width + 2, height: height + 2, rx: 5, fill: 'none', stroke: P.critical, 'stroke-width': 2,
     }));
   }
+  if (opts.selected === t.id) {
+    part.append(s('rect', {
+      x: left - 3, y: top - 3, width: width + 6, height: height + 6, rx: 6, fill: 'none', stroke: P.ink, 'stroke-width': 1.5,
+    }));
+  }
   if (done && width > 16) {
     part.append(s('text', {
       x: left + width / 2, y: top + height - 3.5, 'text-anchor': 'middle', 'font-size': 11, 'font-weight': 700, fill: P.ink,
@@ -204,7 +312,10 @@ function drawBar(g, L, t, r, y, P, opts, critical) {
   drawLabel(g, L, taskName(t, L.lang), left, left + width, y + (ROW_H / 2) + 4, P, 400);
 }
 
-// `rows` is the visible list: {kind:'phase', phase, roll} or {kind:'task', task}.
+const rowTasks = (row) => (row.kind === 'task' ? [row.task] : row.items || []);
+
+// `rows` is the visible list: {kind:'phase', phase, roll}, {kind:'task', task},
+// or {kind:'lane', phase, items, first, last} for several tasks on one row.
 export function drawBody(L, doc, sched, rows, P, opts) {
   const height = Math.max(rows.length * ROW_H, 1);
   const root = s('g', { direction: 'ltr' });
@@ -223,7 +334,8 @@ export function drawBody(L, doc, sched, rows, P, opts) {
       root.append(s('line', { x1: L.x(d), x2: L.x(d), y1: 0, y2: height, stroke: P.grid }));
     }
   }
-  rows.forEach((_, i) => {
+  rows.forEach((row, i) => {
+    if ((row.kind === 'lane' || row.kind === 'heads') && !row.last) return;
     const ly = (i + 1) * ROW_H;
     root.append(s('line', { x1: 0, x2: L.width, y1: ly, y2: ly, stroke: P.grid, 'stroke-opacity': 0.6 }));
   });
@@ -232,15 +344,14 @@ export function drawBody(L, doc, sched, rows, P, opts) {
   root.append(hover);
 
   const yOf = new Map();
-  rows.forEach((row, i) => { if (row.kind === 'task') yOf.set(row.task.id, i * ROW_H); });
+  rows.forEach((row, i) => { for (const t of rowTasks(row)) yOf.set(t.id, i * ROW_H); });
 
   if (opts.baseline) {
-    for (const row of rows) {
-      if (row.kind !== 'task') continue;
-      const b = opts.baseline.tasks[row.task.id];
+    for (const t of rows.flatMap(rowTasks)) {
+      const b = opts.baseline.tasks[t.id];
       if (!b) continue;
       const { left, width } = span(L, toDay(b.start), toDay(b.end));
-      root.append(s('rect', { x: left, y: yOf.get(row.task.id) + ROW_H - 7, width: Math.max(width, 3), height: 3, rx: 1.5, fill: P.baseline }));
+      root.append(s('rect', { x: left, y: yOf.get(t.id) + ROW_H - 7, width: Math.max(width, 3), height: 3, rx: 1.5, fill: P.baseline }));
     }
   }
 
@@ -253,9 +364,7 @@ export function drawBody(L, doc, sched, rows, P, opts) {
 
   if (opts.showDeps) {
     const layer = s('g', { 'pointer-events': 'none' });
-    for (const row of rows) {
-      if (row.kind !== 'task') continue;
-      const t = row.task;
+    for (const t of rows.flatMap(rowTasks)) {
       const r = sched.rows.get(t.id);
       if (!r) continue;
       for (const dep of t.deps || []) {
@@ -282,18 +391,25 @@ export function drawBody(L, doc, sched, rows, P, opts) {
 
   rows.forEach((row, i) => {
     const y = i * ROW_H;
+    const heading = (phase, roll) => {
+      const { left, width } = span(L, roll.start, roll.end);
+      root.append(s('rect', { x: left, y: y + 11, width, height: 6, rx: 3, fill: P.ink2 }));
+      drawLabel(root, L, phaseName(phase, L.lang), left, left + width, y + (ROW_H / 2) + 4, P, 700);
+    };
     if (row.kind === 'phase') {
-      if (!row.roll) return;
-      const { left, width } = span(L, row.roll.start, row.roll.end);
-      root.append(s('rect', { x: left, y: y + 12, width, height: 6, rx: 3, fill: P.ink2 }));
-      drawLabel(root, L, phaseName(row.phase, L.lang), left, left + width, y + (ROW_H / 2) + 4, P, 700);
+      if (row.roll) heading(row.phase, row.roll);
       return;
     }
-    const t = row.task;
-    const r = sched.rows.get(t.id);
-    if (!r) return;
-    if (isMilestone(t)) drawMilestone(root, L, t, r, y, P, opts.lateMilestones?.has(t.id));
-    else drawBar(root, L, t, r, y, P, opts, criticalOf(t, r));
+    if (row.kind === 'heads') {
+      for (const head of row.heads) heading(head.phase, head.roll);
+      return;
+    }
+    for (const t of rowTasks(row)) {
+      const r = sched.rows.get(t.id);
+      if (!r) continue;
+      if (isMilestone(t)) drawMilestone(root, L, t, r, y, P, opts.lateMilestones?.has(t.id), opts.selected === t.id);
+      else drawBar(root, L, t, r, y, P, opts, criticalOf(t, r));
+    }
   });
 
   if (opts.todayDay >= L.start && opts.todayDay <= L.end) {
