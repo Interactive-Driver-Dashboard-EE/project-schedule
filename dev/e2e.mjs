@@ -583,6 +583,30 @@ try {
     await sleep(100);
   });
 
+  await step('a finished task keeps the start, duration and end you give it', async () => {
+    const span = async () => app(`(() => { const r = a.state.sched.rows.get('T002'); return { start: r.start, end: r.end, days: r.end - r.start + 1 }; })()`);
+    const r = await barRect('T002');
+    await click(r.x, r.y);
+    const today = await app(`a.todayIso()`);
+    await setField('status', 'done');
+    assert.equal((await taskOf('T002')).actualEnd, today, 'a task ticked before its planned end ends today');
+    await setField('start', '2026-10-01');
+    await setField('duration', '7');
+    assert.equal((await taskOf('T002')).actualEnd, '2026-10-07');
+    assert.equal((await span()).days, 7, 'the bar is as long as the duration');
+    assert.match(await evaluate(`document.querySelector('.drawer .why').innerText`), /הושלמה\. 7 ימים בפועל/);
+    await setField('actualEnd', '2026-10-10');
+    assert.equal((await taskOf('T002')).duration, 10);
+    const bar = await barRect('T002');
+    await drag(bar.x, bar.y, bar.x - 40, bar.y);
+    const moved = await span();
+    assert.notEqual(moved.start, await evaluate(`import('/js/model.js').then((m) => m.toDay('2026-10-01'))`));
+    assert.equal(moved.days, 10, 'dragging keeps its length');
+    for (let i = 0; i < 5; i++) await clickButton('ביטול');
+    assert.equal((await taskOf('T002')).status, 'todo');
+    await closePanel();
+  });
+
   await step('the page still loads when the data file is over 1 MB', async () => {
     await evaluate(`fetch('/__mock/big',{method:'POST',body:JSON.stringify({on:true})})`);
     await openPage();

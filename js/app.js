@@ -888,16 +888,21 @@ function onChartPointerDown(event) {
   nodes.svg.addEventListener('pointercancel', onDragCancel);
 }
 
+// A finished task is drawn from its actual end, so that end moves with it.
+const finishedTask = (t) => t.status === 'done' && !!t.actualEnd && !isMilestone(t);
+
 function applyDrag(delta) {
   const d = state.drag;
   const task = taskById(d.id);
   if (d.mode === 'resize') {
     const newEnd = Math.max(d.origEnd + delta, d.origStart);
     task.duration = durationForEnd(task, state.doc, d.origStart, newEnd);
+    if (finishedTask(task)) task.actualEnd = toIso(newEnd);
   } else {
     const newStart = d.origStart + delta;
     if (task.fixed) task.fixed = toIso(newStart);
     else task.start = toIso(newStart);
+    if (finishedTask(task)) task.actualEnd = toIso(d.origEnd + delta);
   }
   recompute();
 }
@@ -1030,7 +1035,7 @@ function onDragEnd() {
   if (!d.moved || (JSON.stringify(state.doc) === d.before && !d.targetPhase)) { selectTask(d.id); return; }
   const task = taskById(d.id);
   const r = state.sched.rows.get(d.id);
-  if (d.mode === 'move' && !task.fixed && d.origStart + d.lastDelta < r.depFloor) {
+  if (d.mode === 'move' && !task.fixed && !finishedTask(task) && d.origStart + d.lastDelta < r.depFloor) {
     const blocker = r.drivenBy ? taskName(taskById(r.drivenBy), 'he') : 'משימה קודמת';
     toast(`אי אפשר להקדים: המשימה מחכה ל"${blocker}". אפשר להסיר את התלות בחלונית העריכה.`);
   }
@@ -1086,7 +1091,7 @@ function nudgeTask(id, days) {
   const r = state.sched.rows.get(id);
   if (!t || !r) return;
   const to = r.start + days;
-  if (!t.fixed && to < r.depFloor) {
+  if (!t.fixed && !finishedTask(t) && to < r.depFloor) {
     const blocker = r.drivenBy ? taskName(taskById(r.drivenBy), 'he') : 'משימה קודמת';
     toast(`אי אפשר להקדים: המשימה מחכה ל"${blocker}".`);
     return;
@@ -1094,6 +1099,7 @@ function nudgeTask(id, days) {
   commit((doc) => {
     const x = doc.tasks.find((y) => y.id === id);
     if (x.fixed) x.fixed = toIso(to); else x.start = toIso(to);
+    if (finishedTask(x)) x.actualEnd = toIso(r.end + days);
   }, { group: `nudge:${id}` });
 }
 

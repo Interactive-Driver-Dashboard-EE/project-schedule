@@ -5,7 +5,9 @@ import { h, s } from './dom.js';
 import {
   barShape, markShape, PALETTES, STYLE,
 } from './gantt.js';
-import { addDays, isMilestone, toDay, toIso, wouldCreateCycle } from './model.js';
+import {
+  addDays, durationForEnd, endFor, isMilestone, toDay, toIso, wouldCreateCycle,
+} from './model.js';
 import { taskName } from './mspdi.js';
 import { renderTaskLog } from './worklog.js';
 
@@ -57,9 +59,16 @@ function drawerHead(title) {
     h('button', { class: 'icon-btn', onclick: closeDrawer }, 'סגירה'));
 }
 
+// A finished task keeps the end it actually had, so editing its start or
+// duration moves that end too.
+const finished = (t) => t.status === 'done' && !!t.actualEnd && !isMilestone(t);
+
 function explainTiming(t, r) {
   const parts = [];
-  if (isMilestone(t)) {
+  if (finished(t)) {
+    parts.push(h('div', {}, h('b', { class: 'num' }, `${fmt(r.start)} – ${fmt(r.end)}`)));
+    parts.push(h('div', {}, `הושלמה. ${r.end - r.start + 1} ימים בפועל, עד ${fmt(r.end)}.`));
+  } else if (isMilestone(t)) {
     parts.push(h('div', {}, h('b', {}, fmt(r.end))));
     if (t.fixed && r.depFloor > r.end) parts.push(h('div', { class: 'warn' }, `המשימות שלפניו מסתיימות ${r.depFloor - r.end} ימים מאוחר מדי.`));
   } else {
@@ -67,7 +76,7 @@ function explainTiming(t, r) {
     const span = r.end - r.start + 1;
     if (span > (t.duration || 1)) parts.push(h('div', {}, `${t.duration || 1} ימי עבודה על פני ${span} ימים (לא עובדים בזמן בחינות או מילואים).`));
   }
-  if (r.drivenBy) parts.push(h('div', {}, `מתחילה אחרי: ${taskName(taskById(r.drivenBy), 'he')}`));
+  if (r.drivenBy && !finished(t)) parts.push(h('div', {}, `מתחילה אחרי: ${taskName(taskById(r.drivenBy), 'he')}`));
   if (t.status !== 'done' && !(isMilestone(t) && t.fixed)) {
     parts.push(h('div', { class: r.slack < 0 ? 'warn' : '' },
       r.slack < 0 ? `באיחור של ${-r.slack} ימים מול מועד שתלוי בה.` : `מרווח: ${r.slack} ימים עד שזה פוגע במועד.`));
@@ -212,9 +221,11 @@ function setStatus(id, value) {
     if (value === 'done') {
       x.doneAt = todayIso();
       if (!isMilestone(x)) {
+        // Finished early ends today; marked late, it keeps the planned end
+        // instead of stretching to the day it was ticked.
         const r = state.sched.rows.get(id);
         x.start = toIso(r.start);
-        x.actualEnd = todayIso();
+        x.actualEnd = toIso(Math.min(r.end, toDay(todayIso())));
       }
     } else {
       delete x.doneAt;
@@ -257,9 +268,22 @@ export function renderTaskDrawer() {
         ? field('תאריך קבוע', dateInput('fixed', t.fixed, (v) => update(t.id, (x) => { if (v) x.fixed = v; else delete x.fixed; })))
         : field('משך (ימי עבודה)', h('input', {
           type: 'number', min: 1, value: t.duration || 1, dataset: { fieldKey: 'duration' },
-          onchange: (e) => update(t.id, (x) => { x.duration = Math.max(1, Number(e.target.value) || 1); }),
+          onchange: (e) => update(t.id, (x, doc) => {
+            x.duration = Math.max(1, Number(e.target.value) || 1);
+            if (finished(x)) x.actualEnd = endFor(x, doc, x.start || toIso(r.start), x.duration);
+          }),
         })),
-      !milestone && field('לא להתחיל לפני', dateInput('start', t.start, (v) => update(t.id, (x) => { if (v) x.start = v; else delete x.start; })))),
+      !milestone && field(finished(t) ? 'התחילה בתאריך' : 'לא להתחיל לפני', dateInput('start', t.start, (v) => update(t.id, (x, doc) => {
+        if (v) x.start = v; else delete x.start;
+        if (finished(x)) x.actualEnd = endFor(x, doc, x.start || toIso(r.start), x.duration);
+      }))),
+      finished(t) && field('הסתיימה בתאריך', dateInput('actualEnd', t.actualEnd, (v) => update(t.id, (x, doc) => {
+        if (!v) return;
+        const from = x.start || toIso(r.start);
+        if (v < from) x.start = v;
+        x.actualEnd = v;
+        x.duration = durationForEnd(x, doc, toDay(x.start || from), toDay(v));
+      })))),
     h('div', { class: 'f' },
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!t.external, onchange: (e) => update(t.id, (x) => { x.external = e.target.checked || undefined; }) }), 'תלוי בגורם חיצוני (ממשיך גם בזמן בחינות)'),
       !t.external && h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: !!t.noPause, onchange: (e) => update(t.id, (x) => { x.noPause = e.target.checked || undefined; }) }), 'ממשיך גם בזמן בחינות'),

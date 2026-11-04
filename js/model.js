@@ -332,6 +332,13 @@ export function movePhase(doc, id, { before, after } = {}) {
   else doc.phases.splice(after ? anchor + 1 : anchor, 0, phase);
 }
 
+// The last day of a task that starts on `startIso` and needs `duration` working
+// days. Used to keep a finished task's end in step when its dates are edited.
+export function endFor(task, doc, startIso, duration) {
+  const spans = pauseDays(task, doc);
+  return toIso(forwardEnd(nextWorking(toDay(startIso), spans), duration || 1, spans));
+}
+
 // Working days a task needs in order to finish on `endDay` when it starts on `startDay`.
 export function durationForEnd(task, doc, startDay, endDay) {
   const spans = pauseDays(task, doc);

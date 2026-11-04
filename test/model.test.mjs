@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   schedule, toDay, toIso, findIssues, mergeDocs, wouldCreateCycle, weekSummary, validateDoc, addDays,
-  stampChanges, moveTaskTo, movePhase,
+  stampChanges, moveTaskTo, movePhase, endFor,
 } from '../js/model.js';
 
 const base = (tasks, extra = {}) => ({ projectStart: '2027-01-01', phases: [], tasks, ...extra });
@@ -281,4 +281,12 @@ test('log entries added on both sides are both kept', () => {
   assert.deepEqual(merged.log.map((x) => x.id), ['l0', 'l1', 'l2']);
   assert.equal(conflicts.length, 0);
   assert.equal('log' in mergeDocs(base([]), base([]), base([])).merged, false);
+});
+
+test('the end of a finished task follows its start and duration', () => {
+  const blackouts = [{ id: 'x', start: '2027-01-03', end: '2027-01-05', appliesTo: 'p1' }];
+  const doc = base([], { blackouts });
+  assert.equal(endFor({ owner: 'p2' }, doc, '2027-01-01', 7), '2027-01-07');
+  assert.equal(endFor({ owner: 'p1' }, doc, '2027-01-01', 7), '2027-01-10');
+  assert.equal(endFor({ owner: 'p1' }, doc, '2027-01-04', 1), '2027-01-06');
 });
