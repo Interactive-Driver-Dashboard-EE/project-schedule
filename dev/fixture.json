@@ -4,7 +4,7 @@
  "projectStart": "2027-01-03",
  "settings": { "criticalDays": 7 },
  "people": [
-  { "id": "p1", "name": "Alex" },
+  { "id": "p1", "name": "Alex", "github": "alex-gh" },
   { "id": "p2", "name": "Sam" }
  ],
  "phases": [

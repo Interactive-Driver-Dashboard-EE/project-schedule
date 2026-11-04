@@ -110,7 +110,7 @@ async function click(x, y) {
 }
 
 const rowText = (id) => evaluate(`document.querySelector('[data-row="${id}"]')?.innerText.replace(/\\n/g,' | ')`);
-const barRect = (id, part = 'bar') => evaluate(`(() => { const e = document.querySelector('[data-task="${id}"][data-part="${part}"]'); e.scrollIntoView({block:'center', inline:'center'}); const r = e.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2,left:r.left,right:r.right,w:r.width}; })()`);
+const barRect = (id, part = 'bar') => evaluate(`(() => { const e = document.querySelector('[data-task="${id}"][data-part="${part}"]'); e.scrollIntoView({block:'center', inline:'center'}); const r = (e.tagName === 'g' ? e.querySelector('rect') : e).getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2,left:r.left,right:r.right,w:r.width}; })()`);
 const mockState = () => evaluate(`fetch('/__mock/state').then(r=>r.json())`);
 const clickButton = (text) => evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(text)}).click()`);
 const setField = (key, value) => evaluate(`(() => { const e = document.querySelector('[data-field-key="${key}"]'); e.value = ${JSON.stringify(value)}; e.dispatchEvent(new Event('change',{bubbles:true})); })()`);
@@ -202,7 +202,7 @@ try {
     assert.equal(st.commits[0].branch, 'schedule-data');
     assert.match(st.commits[0].message, new RegExp(`Schedule: updated .*${movable.id}`));
     assert.equal(st.doc.tasks.find((t) => t.id === movable.id).name, 'שם ערוך בבדיקה');
-    assert.equal(await evaluate(`document.querySelector('.sync').textContent.startsWith('נשמר')`), true);
+    assert.match(await evaluate(`document.querySelector('.sync').textContent`), /^✓ נשמר עכשיו · Alex$/);
   });
 
   await step('a partner saving at the same time merges instead of overwriting', async () => {
@@ -423,6 +423,184 @@ try {
     })()`);
     assert.deepEqual(framed, ['over']);
     assert.ok(!(await evaluate(`document.body.innerText.includes('סימון מרווח קטן')`)));
+  });
+
+  const app = (expr) => evaluate(`import('/js/app.js').then((a) => ${expr})`);
+  const taskOf = (id) => app(`a.state.doc.tasks.find((t) => t.id === ${JSON.stringify(id)}) || null`);
+  const handleAt = (id) => evaluate(`(() => { const r = document.querySelector('[data-task="${id}"][data-part="link"] circle').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+  const toasts = () => evaluate(`document.getElementById('toasts').innerText`);
+  async function key(name, { shift = false, code = name, vk, text } = {}) {
+    const base = { key: name, code, windowsVirtualKeyCode: vk, modifiers: shift ? 8 : 0 };
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', ...base, text });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+    await sleep(80);
+  }
+  const closePanel = () => evaluate(`document.querySelector('.drawer .icon-btn')?.click()`);
+
+  await step('the status line shows unsaved changes, then how long ago it was saved and by whom', async () => {
+    const r = await barRect('T002');
+    await click(r.x, r.y);
+    await setField('note', 'הערה לבדיקת סטטוס');
+    assert.match(await evaluate(`document.querySelector('.sync').textContent`), /יש שינויים שלא נשמרו · שמירה אוטומטית בעוד \d+ שנ׳/);
+    assert.equal(await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='שמירה').classList.contains('primary')`), true);
+    await clickButton('שמירה');
+    await sleep(300);
+    assert.match(await evaluate(`document.querySelector('.sync').textContent`), /^✓ נשמר עכשיו · Alex$/);
+    const saved = (await mockState()).doc.tasks.find((t) => t.id === 'T002');
+    assert.equal(saved.updated.by, 'p1');
+    assert.match(saved.updated.at, /^\d{4}-\d\d-\d\dT\d\d:\d\dZ$/);
+    assert.match(await evaluate(`document.querySelector('.drawer .stamps').innerText`), /עודכנה לאחרונה: Alex · עכשיו/);
+    await clickButton('משימה חדשה אחריה');
+    assert.match(await evaluate(`document.querySelector('.drawer .stamps').innerText`), /נוצרה: Alex · עכשיו/);
+    await clickButton('ביטול');
+    await closePanel();
+  });
+
+  await step('dragging from the end circle makes a dependency, and a loop is refused', async () => {
+    const to = await barRect('T005');
+    const from = await handleAt('T002');
+    await drag(from.x, from.y, to.x, to.y);
+    assert.ok((await taskOf('T005')).deps.some((d) => d.id === 'T002'), 'T005 now waits for T002');
+    assert.match(await toasts(), /נוספה תלות/);
+    await shot('15-link');
+    const target = await barRect('T002');
+    const back = await handleAt('T005');
+    await drag(back.x, back.y, target.x, target.y);
+    assert.equal((await taskOf('T002')).deps.length, 0, 'a loop is not added');
+    assert.match(await toasts(), /תלות מעגלית/);
+    await clickButton('ביטול');
+    assert.equal((await taskOf('T005')).deps.some((d) => d.id === 'T002'), false);
+  });
+
+  const dropRow = (fromSel, toSel, lowerHalf) => evaluate(`(() => {
+    const src = document.querySelector('${fromSel}');
+    const dst = document.querySelector('${toSel}');
+    const dt = new DataTransfer();
+    const box = dst.getBoundingClientRect();
+    const y = ${lowerHalf} ? box.bottom - 3 : box.top + 3;
+    const fire = (type, el) => el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt, clientX: box.x + 30, clientY: y }));
+    fire('dragstart', src); fire('dragover', dst);
+    const marked = dst.className;
+    fire('drop', dst); fire('dragend', src);
+    return marked;
+  })()`);
+
+  await step('table rows drag to a new place and heading, and headings reorder', async () => {
+    const marked = await dropRow('[data-row="T001"]', '[data-row="T004"]', true);
+    assert.match(marked, /drop-after/);
+    const order = await app(`a.state.doc.tasks.map((t) => t.id)`);
+    assert.equal(order[order.indexOf('T004') + 1], 'T001');
+    assert.equal((await taskOf('T001')).phase, 'b');
+    assert.ok(await rowText('T001'), 'the moved row is still in the table');
+    await clickButton('ביטול');
+    assert.equal((await taskOf('T001')).phase, 'a');
+    await dropRow('[data-phase="b"]', '[data-phase="a"]', false);
+    assert.deepEqual(await app(`a.state.doc.phases.map((p) => p.id)`), ['b', 'a']);
+    await clickButton('ביטול');
+    assert.deepEqual(await app(`a.state.doc.phases.map((p) => p.id)`), ['a', 'b']);
+  });
+
+  await step('in the layout by headings, dragging a task down moves it to that heading', async () => {
+    await app(`a.setPref('layout', 'heading')`);
+    await sleep(150);
+    const r = await barRect('T002');
+    const lane = await evaluate(`(() => { const b = document.querySelector('[data-phase="b"]').getBoundingClientRect(); return b.y + Math.min(b.height / 2, 14); })()`);
+    await mouse('mouseMoved', r.x, r.y, 0);
+    await mouse('mousePressed', r.x, r.y);
+    for (let i = 1; i <= 6; i++) { await mouse('mouseMoved', r.x, r.y + ((lane - r.y) * i) / 6); await sleep(15); }
+    assert.equal(await evaluate(`document.querySelector('[data-phase="b"]').classList.contains('drop-into')`), true, 'the target heading is highlighted');
+    await shot('16-heading-drag');
+    await mouse('mouseReleased', r.x, lane);
+    await sleep(120);
+    assert.equal((await taskOf('T002')).phase, 'b');
+    assert.match(await toasts(), /הועברה לכותרת "Build"/);
+    await clickButton('ביטול');
+    assert.equal((await taskOf('T002')).phase, 'a');
+    await app(`a.setPref('layout', 'list')`);
+    await sleep(150);
+  });
+
+  await step('arrow keys move the selected task, Delete removes it, and ? lists the shortcuts', async () => {
+    const r = await barRect('T004');
+    await click(r.x, r.y);
+    const start = await app(`a.state.sched.rows.get('T004').start`);
+    await key('ArrowLeft', { vk: 37 });
+    assert.equal(await app(`a.state.sched.rows.get('T004').start`), start + 1, 'left is later in a right-to-left chart');
+    await key('ArrowLeft', { vk: 37, shift: true });
+    assert.equal(await app(`a.state.sched.rows.get('T004').start`), start + 8);
+    await clickButton('ביטול');
+    assert.equal(await app(`a.state.sched.rows.get('T004').start`), start, 'quick presses undo as one step');
+    await key('ArrowRight', { vk: 39 });
+    assert.equal(await app(`a.state.sched.rows.get('T004').start`), start);
+    assert.match(await toasts(), /אי אפשר להקדים/);
+    await key('?', { code: 'Slash', vk: 191, shift: true, text: '?' });
+    assert.match(await evaluate(`document.querySelector('dialog.shortcuts[open]')?.innerText || ''`), /Ctrl \+ Y/);
+    await shot('17-shortcuts');
+    await key('Escape', { vk: 27 });
+    assert.equal(await evaluate(`!!document.querySelector('dialog.shortcuts')`), false);
+    await key('Delete', { vk: 46 });
+    assert.equal(await taskOf('T004'), null);
+    await clickButton('ביטול');
+    assert.ok(await taskOf('T004'));
+  });
+
+  await step('a log entry with hours and a pasted picture saves, and shows on the log page', async () => {
+    const r = await barRect('T001');
+    await click(r.x, r.y);
+    await clickButton('+ רישום ביומן');
+    await sleep(100);
+    const id = await app(`a.state.doc.log.at(-1).id`);
+    assert.equal(await evaluate(`document.activeElement?.dataset.fieldKey`), `log-${id}-text`, 'the new entry is ready to type in');
+    await setField(`log-${id}-text`, 'חיווט ראשון של הלוח');
+    await setField(`log-${id}-hours`, '2.5');
+    await evaluate(`(async () => {
+      const c = document.createElement('canvas'); c.width = 2400; c.height = 1200;
+      const g = c.getContext('2d'); g.fillStyle = '#2a78d6'; g.fillRect(0, 0, 2400, 1200);
+      const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob], 'board.png', { type: 'image/png' }));
+      document.querySelector('[data-field-key="log-${id}-text"]').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    })()`);
+    for (let i = 0; i < 40 && !(await app(`a.state.doc.log.at(-1).images?.length || 0`)); i++) await sleep(100);
+    const entry = await app(`a.state.doc.log.at(-1)`);
+    assert.equal(entry.task, 'T001');
+    assert.equal(entry.by, 'p1');
+    assert.equal(entry.hours, 2.5);
+    assert.equal(entry.images.length, 1);
+    assert.match(entry.images[0].path, /^log-files\/\d{4}\/l.+\.jpg$/);
+    assert.ok((await mockState()).files.includes(entry.images[0].path), 'the picture was uploaded beside the data');
+    assert.match(await evaluate(`document.querySelector('.drawer .thumb img').src`), /^blob:/);
+    assert.match(await evaluate(`document.querySelector('.drawer').innerText`), /יומן עבודה \(רישום אחד · 2\.5 שעות\)/);
+    await shot('18-log-panel');
+    await clickButton('שמירה');
+    await sleep(300);
+    const st = await mockState();
+    assert.match(st.commits.at(-1).message, /log \+1/);
+    assert.equal(st.doc.log.at(-1).text, 'חיווט ראשון של הלוח');
+    await closePanel();
+    await evaluate(`document.querySelector('[role=tablist] button:nth-child(4)').click()`);
+    await sleep(150);
+    const page = await evaluate(`document.querySelector('.page').innerText`);
+    assert.match(await evaluate(`[...document.querySelectorAll('.page textarea')].map((t) => t.value).join('|')`), /חיווט ראשון של הלוח/);
+    assert.match(page, /2\.5 שעות · רישום אחד/);
+    assert.match(page, /Alex: 2\.5/);
+    await send('Emulation.setFocusEmulationEnabled', { enabled: true });
+    await send('Browser.grantPermissions', { permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite'], origin: BASE });
+    await clickButton('העתקה כטקסט');
+    await sleep(100);
+    const copied = await evaluate(`navigator.clipboard.readText()`);
+    assert.match(copied, /- Alex, 2\.5 שעות · .+: חיווט ראשון של הלוח/);
+    assert.match(copied, /תמונה: https:\/\/github\.com\/.+\/blob\/schedule-data\/log-files\//);
+    await shot('19-log-page');
+    await evaluate(`document.querySelector('[role=tablist] button:nth-child(1)').click()`);
+    await sleep(100);
+  });
+
+  await step('the page still loads when the data file is over 1 MB', async () => {
+    await evaluate(`fetch('/__mock/big',{method:'POST',body:JSON.stringify({on:true})})`);
+    await openPage();
+    assert.ok(await evaluate(`document.querySelectorAll('.row').length`) > 5);
+    await evaluate(`fetch('/__mock/big',{method:'POST',body:JSON.stringify({on:false})})`);
   });
 
   await step('dark theme and phone width render without overflow', async () => {

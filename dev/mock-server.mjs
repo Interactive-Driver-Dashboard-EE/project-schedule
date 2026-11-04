@@ -16,6 +16,9 @@ let text = await readFile(dataPath, 'utf8');
 let sha = hash(text);
 const commits = [];
 const issues = new Map();
+const files = new Map();
+const USER = 'alex-gh';
+let bigFile = false;
 
 function hash(value) {
   return createHash('sha1').update(value).digest('hex');
@@ -35,18 +38,34 @@ function readBody(req) {
 }
 
 async function api(req, res, url) {
-  if (url.pathname === '/__mock/state') return send(res, 200, { sha, commits, doc: JSON.parse(text) });
+  if (url.pathname === '/__mock/state') return send(res, 200, { sha, commits, doc: JSON.parse(text), files: [...files.keys()] });
+  // Makes the data file look larger than 1 MB, so GitHub would leave out its content.
+  if (url.pathname === '/__mock/big' && req.method === 'POST') {
+    bigFile = (await readBody(req)).on;
+    return send(res, 200, { bigFile });
+  }
   // Lets a test change the file behind the page, as the other partner would.
   if (url.pathname === '/__mock/external-edit' && req.method === 'POST') {
     const { doc } = await readBody(req);
     text = `${JSON.stringify(doc, null, 1)}\n`;
     sha = hash(text);
+    commits.push({ message: 'Schedule: partner edit', branch: 'schedule-data', path: 'schedule.json', date: new Date().toISOString(), login: 'partner-gh' });
     return send(res, 200, { sha });
   }
   if (!req.headers.authorization) return send(res, 401, { message: 'Bad credentials' });
   if (req.headers.authorization === 'Bearer bad') return send(res, 401, { message: 'Bad credentials' });
+  const raw = (req.headers.accept || '').includes('raw');
+  if (url.pathname === '/__mock/user') return send(res, 200, { login: USER });
+  if (url.pathname.endsWith('/commits')) {
+    const path = url.searchParams.get('path');
+    const list = commits.filter((c) => !path || c.path === path).reverse()
+      .map((c) => ({ commit: { message: c.message, committer: { date: c.date } }, author: { login: c.login } }));
+    return send(res, 200, list.slice(0, Number(url.searchParams.get('per_page')) || 30));
+  }
   if (url.pathname.endsWith('/contents/schedule.json')) {
     if (req.method === 'GET') {
+      if (raw) { res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end(text); }
+      if (bigFile) return send(res, 200, { sha, content: '', encoding: 'none', size: Buffer.byteLength(text) });
       return send(res, 200, { sha, content: Buffer.from(text).toString('base64') });
     }
     if (req.method === 'PUT') {
@@ -54,9 +73,23 @@ async function api(req, res, url) {
       if (body.sha !== sha) return send(res, 409, { message: 'sha mismatch' });
       text = Buffer.from(body.content, 'base64').toString('utf8');
       sha = hash(text);
-      commits.push({ message: body.message, branch: body.branch });
+      commits.push({ message: body.message, branch: body.branch, path: 'schedule.json', date: new Date().toISOString(), login: USER });
       return send(res, 200, { content: { sha } });
     }
+  }
+  const other = url.pathname.match(/\/contents\/(.+)$/);
+  if (other) {
+    const path = decodeURIComponent(other[1]);
+    if (req.method === 'PUT') {
+      const body = await readBody(req);
+      if (files.has(path) && !body.sha) return send(res, 422, { message: 'sha was not supplied' });
+      files.set(path, Buffer.from(body.content, 'base64'));
+      commits.push({ message: body.message, branch: body.branch, path, date: new Date().toISOString(), login: USER });
+      return send(res, 201, { content: { path, sha: hash(path) } });
+    }
+    if (!files.has(path)) return send(res, 404, { message: 'Not Found' });
+    if (raw) { res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); return res.end(files.get(path)); }
+    return send(res, 200, { path, content: files.get(path).toString('base64') });
   }
   if (url.pathname.endsWith('/issues')) {
     if (req.method === 'GET') return send(res, 200, [...issues.values()]);

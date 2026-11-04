@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   schedule, toDay, toIso, findIssues, mergeDocs, wouldCreateCycle, weekSummary, validateDoc, addDays,
+  stampChanges, moveTaskTo, movePhase,
 } from '../js/model.js';
 
 const base = (tasks, extra = {}) => ({ projectStart: '2027-01-01', phases: [], tasks, ...extra });
@@ -217,4 +218,67 @@ test('validation catches duplicate ids and bad shapes', () => {
 test('date helpers round-trip across a leap day', () => {
   assert.equal(addDays('2028-02-28', 1), '2028-02-29');
   assert.equal(toIso(toDay('2027-07-25')), '2027-07-25');
+});
+
+test('stamps mark who added a task and who changed it last', () => {
+  const before = base([{ id: 'a', name: 'old' }, { id: 'b', name: 'same', updated: { by: 'p2', at: 'x' } }]);
+  const after = structuredClone(before);
+  after.tasks[0].name = 'new';
+  after.tasks.push({ id: 'c', name: 'added' });
+  after.log = [{ id: 'l1', text: 'note' }];
+  stampChanges(before, after, 'p1', '2027-01-01T10:00Z');
+  assert.deepEqual(after.tasks[0].updated, { by: 'p1', at: '2027-01-01T10:00Z' });
+  assert.equal(after.tasks[0].created, undefined);
+  assert.deepEqual(after.tasks[1].updated, { by: 'p2', at: 'x' });
+  assert.deepEqual(after.tasks[2].created, { by: 'p1', at: '2027-01-01T10:00Z' });
+  assert.equal(after.tasks[2].updated, undefined);
+  assert.equal(after.log[0].created.by, 'p1');
+});
+
+test('stamps ignore a change to the stamps alone and an unknown person', () => {
+  const before = base([{ id: 'a', name: 'n' }]);
+  const after = structuredClone(before);
+  after.tasks[0].created = { by: 'p2', at: 'y' };
+  stampChanges(before, after, 'p1', 'now');
+  assert.equal(after.tasks[0].updated, undefined);
+  const other = structuredClone(before);
+  other.tasks[0].name = 'changed';
+  stampChanges(before, other, null, 'now');
+  assert.equal(other.tasks[0].updated, undefined);
+});
+
+test('a task moves next to another and takes its heading', () => {
+  const doc = base([{ id: 'a', phase: 'x' }, { id: 'b', phase: 'x' }, { id: 'c', phase: 'y' }, { id: 'd', phase: 'y' }]);
+  moveTaskTo(doc, 'a', { after: 'c' });
+  assert.deepEqual(doc.tasks.map((t) => t.id), ['b', 'c', 'a', 'd']);
+  assert.equal(doc.tasks[2].phase, 'y');
+  moveTaskTo(doc, 'd', { before: 'b' });
+  assert.deepEqual(doc.tasks.map((t) => `${t.id}${t.phase}`), ['dx', 'bx', 'cy', 'ay']);
+});
+
+test('a task moves to the start or end of a heading', () => {
+  const doc = base([{ id: 'a', phase: 'x' }, { id: 'b', phase: 'y' }, { id: 'c', phase: 'y' }]);
+  moveTaskTo(doc, 'a', { phase: 'y', at: 'start' });
+  assert.deepEqual(doc.tasks.map((t) => t.id), ['a', 'b', 'c']);
+  assert.equal(doc.tasks[0].phase, 'y');
+  moveTaskTo(doc, 'b', { phase: 'z' });
+  assert.deepEqual(doc.tasks.map((t) => `${t.id}${t.phase}`), ['ay', 'cy', 'bz']);
+});
+
+test('headings reorder before or after another heading', () => {
+  const doc = base([], { phases: [{ id: 'x' }, { id: 'y' }, { id: 'z' }] });
+  movePhase(doc, 'z', { before: 'x' });
+  assert.deepEqual(doc.phases.map((p) => p.id), ['z', 'x', 'y']);
+  movePhase(doc, 'z', { after: 'y' });
+  assert.deepEqual(doc.phases.map((p) => p.id), ['x', 'y', 'z']);
+});
+
+test('log entries added on both sides are both kept', () => {
+  const b = base([], { log: [{ id: 'l0', text: 'first' }] });
+  const mine = structuredClone(b); mine.log.push({ id: 'l1', text: 'mine' });
+  const theirs = structuredClone(b); theirs.log.push({ id: 'l2', text: 'theirs' });
+  const { merged, conflicts } = mergeDocs(b, mine, theirs);
+  assert.deepEqual(merged.log.map((x) => x.id), ['l0', 'l1', 'l2']);
+  assert.equal(conflicts.length, 0);
+  assert.equal('log' in mergeDocs(base([]), base([]), base([])).merged, false);
 });

@@ -4,10 +4,12 @@ import { buildExportSvg, downloadPng } from './export.js';
 import { buildLayout, drawBody, drawHeader, HEAD_H, layoutRows, PALETTES, ROW_H } from './gantt.js';
 import { Store, StoreError } from './github.js';
 import {
-  durationForEnd, findIssues, isMilestone, mergeDocs, schedule, takeBaseline, toDay, toIso, validateDoc, weekSummary,
+  durationForEnd, findIssues, isMilestone, mergeDocs, movePhase, moveTaskTo, schedule, stampChanges, takeBaseline, toDay, toIso,
+  validateDoc, weekSummary, wouldCreateCycle,
 } from './model.js';
 import { phaseName, taskName, toMspdi } from './mspdi.js';
-import { renderSettings, renderTaskDrawer } from './panels.js';
+import { openShortcuts, renderSettings, renderTaskDrawer } from './panels.js';
+import { renderLogPage } from './worklog.js';
 
 const ZOOMS = { week: 14, month: 6, all: 2 };
 const SAVE_DELAY_MS = 15000;
@@ -24,6 +26,7 @@ const storage = {
 function loadPrefs() {
   const defaults = {
     zoom: 'all', layout: 'heading', lang: 'he', showDeps: true, showBaseline: false, theme: 'auto', collapsed: [], owner: '', track: '', query: '', tab: 'gantt',
+    logWho: '', logTask: '', logQuery: '',
   };
   try { return { ...defaults, ...JSON.parse(storage.get(PREFS_KEY) || '{}') }; } catch { return defaults; }
 }
@@ -45,17 +48,42 @@ const state = {
   saving: false,
   saveError: null,
   whatIf: null, // JSON of the real plan while experimenting
-  savedAt: null,
+  lastSave: null, // { at, by } of the last save to GitHub, ours or the partner's
+  saveDue: 0, // when the pending autosave runs
+  me: null, // person id of whoever is signed in, or their GitHub login
   drag: null,
+  rowDrag: null, // a table row being dragged: { kind: 'task' | 'phase', id }
 };
 
 let saveTimer = null;
 const nodes = {};
 
+function localIso(d) {
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
 export function todayIso() {
-  const d = new Date();
-  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 10);
+  return localIso(new Date());
+}
+
+// Minute precision is enough for "who changed it and when".
+export function stampNow() {
+  return `${new Date().toISOString().slice(0, 16)}Z`;
+}
+
+// How long ago something was saved or changed, in the words the page uses.
+export function ago(iso) {
+  const then = new Date(iso);
+  const min = Math.floor((Date.now() - then.getTime()) / 60000);
+  const time = then.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+  const days = toDay(localIso(new Date())) - toDay(localIso(then));
+  if (min < 1) return 'עכשיו';
+  if (min === 1) return 'לפני דקה';
+  if (min < 60) return `לפני ${min} דק׳`;
+  if (min < 120) return 'לפני שעה';
+  if (days === 0) return min < 12 * 60 ? `לפני ${Math.floor(min / 60)} שעות` : `היום ב-${time}`;
+  if (days === 1) return `אתמול ב-${time}`;
+  return `ב-${fmt(toDay(localIso(then)))} ${time}`;
 }
 
 const fmt = (day) => { const i = toIso(day); return `${i.slice(8)}.${i.slice(5, 7)}.${i.slice(2, 4)}`; };
@@ -97,17 +125,40 @@ export function personName(id) {
   return state.doc.people?.find((p) => p.id === id)?.name || id;
 }
 
+// The person a GitHub login belongs to, or the login itself for anyone else.
+function personFor(login) {
+  if (!login) return null;
+  const p = (state.doc.people || []).find((x) => (x.github || '').toLowerCase() === login.toLowerCase());
+  return p ? p.id : login;
+}
+
 export function taskById(id) {
   return state.doc.tasks.find((t) => t.id === id);
 }
 
-// Every edit goes through here so undo, recalculation and saving stay in step.
-export function commit(mutate, { render: doRender = true } = {}) {
-  state.history.push(JSON.stringify(state.doc));
-  if (state.history.length > 60) state.history.shift();
-  state.future = [];
+let lastGroup = { key: null, at: 0 };
+
+// Every edit goes through here so undo, recalculation, saving and the
+// "who changed it" stamps stay in step. Edits sharing a `group` less than
+// 1.5 s apart, such as repeated arrow presses, undo as one step.
+export function commit(mutate, { render: doRender = true, group = null } = {}) {
+  const before = JSON.stringify(state.doc);
+  const now = Date.now();
+  const joins = group && lastGroup.key === group && now - lastGroup.at < 1500;
   mutate(state.doc);
+  recordChange(before, !joins);
+  lastGroup = { key: group, at: now };
   afterChange(doRender);
+}
+
+function recordChange(before, newStep = true) {
+  if (newStep) {
+    state.history.push(before);
+    if (state.history.length > 60) state.history.shift();
+  }
+  lastGroup = { key: null, at: 0 };
+  state.future = [];
+  stampChanges(JSON.parse(before), state.doc, state.me, stampNow());
 }
 
 function afterChange(doRender = true) {
@@ -133,8 +184,13 @@ function redo() {
 function markDirty() {
   state.dirty = JSON.stringify(state.doc) !== state.baseJson;
   clearTimeout(saveTimer);
-  if (state.dirty) saveTimer = setTimeout(() => saveNow(), SAVE_DELAY_MS);
+  if (state.dirty) scheduleSave();
   renderSync();
+}
+
+function scheduleSave() {
+  state.saveDue = Date.now() + SAVE_DELAY_MS;
+  saveTimer = setTimeout(() => saveNow(), SAVE_DELAY_MS);
 }
 
 // Describes what changed, so the file's history on GitHub stays readable.
@@ -149,6 +205,14 @@ function describeChange(baseText, doc) {
   if (changed.length) parts.push(`updated ${changed.slice(0, 6).join(', ')}${changed.length > 6 ? ` +${changed.length - 6}` : ''}`);
   if (added.length) parts.push(`added ${added.join(', ')}`);
   if (removed.length) parts.push(`removed ${removed.join(', ')}`);
+  const logBefore = new Map((base.log || []).map((x) => [x.id, JSON.stringify(x)]));
+  const logAfter = new Set((doc.log || []).map((x) => x.id));
+  const logNew = (doc.log || []).filter((x) => !logBefore.has(x.id)).length;
+  const logEdited = (doc.log || []).filter((x) => logBefore.has(x.id) && logBefore.get(x.id) !== JSON.stringify(x)).length;
+  const logGone = [...logBefore.keys()].filter((id) => !logAfter.has(id)).length;
+  if (logNew || logEdited || logGone) {
+    parts.push(`log ${[logNew && `+${logNew}`, logEdited && `~${logEdited}`, logGone && `-${logGone}`].filter(Boolean).join(' ')}`);
+  }
   return `Schedule: ${parts.join('; ') || 'settings'}`;
 }
 
@@ -164,7 +228,7 @@ async function saveNow() {
   renderSync();
   try {
     await pushWithMerge();
-    state.savedAt = new Date();
+    state.lastSave = { at: new Date().toISOString(), by: state.me };
   } catch (err) {
     state.saveError = err.message;
     if (err.kind === 'auth') toast('צריך להתחבר מחדש: הטוקן כבר לא תקף. השינויים נשמרים בעמוד הפתוח עד שתתחברו.');
@@ -184,7 +248,7 @@ async function pushWithMerge() {
       state.sha = await state.store.save(text, state.sha, describeChange(state.baseJson, state.doc));
       state.baseJson = snapshot;
       state.dirty = JSON.stringify(state.doc) !== state.baseJson;
-      if (state.dirty) saveTimer = setTimeout(() => saveNow(), SAVE_DELAY_MS);
+      if (state.dirty) scheduleSave();
       return;
     } catch (err) {
       if (!(err instanceof StoreError) || err.kind !== 'conflict') throw err;
@@ -212,10 +276,11 @@ async function pullAndMerge() {
 }
 
 async function pollRemote() {
-  if (!state.store || state.saving || state.whatIf || state.drag || document.hidden) return;
+  if (!state.store || state.saving || state.whatIf || state.drag || state.rowDrag || document.hidden) return;
   try {
     const remote = await state.store.load();
     if (remote.sha === state.sha) return;
+    refreshLastSave();
     if (state.dirty) {
       await pullAndMerge();
     } else {
@@ -229,6 +294,14 @@ async function pollRemote() {
       toast('הלו"ז עודכן משינוי שנשמר במקום אחר.');
     }
   } catch { /* the next poll retries */ }
+}
+
+async function refreshLastSave() {
+  try {
+    const last = await state.store.lastSave();
+    if (last) state.lastSave = { at: last.at, by: personFor(last.login) };
+    renderSync();
+  } catch { /* the status line falls back to plain text */ }
 }
 
 async function refreshIssues() {
@@ -291,17 +364,29 @@ function currentBaseline() {
 
 // --- rendering ---
 
+// Runs every second, so it only touches the status line and the buttons.
 function renderSync() {
   if (!nodes.sync) return;
   const el = nodes.sync;
   el.className = 'sync';
+  el.title = '';
   if (state.whatIf) el.textContent = 'בדיקת "מה אם": לא נשמר';
   else if (state.saving) el.textContent = 'שומר ב-GitHub…';
   else if (state.saveError) { el.textContent = `לא נשמר: ${state.saveError}`; el.classList.add('bad'); }
-  else if (state.dirty) el.textContent = 'יש שינויים, נשמרים בעוד רגע';
-  else if (state.savedAt) el.textContent = `נשמר ב-${state.savedAt.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}`;
-  else el.textContent = 'מעודכן מול GitHub';
-  if (nodes.saveBtn) nodes.saveBtn.disabled = !state.dirty || state.saving || !!state.whatIf;
+  else if (state.dirty) {
+    const secs = Math.max(0, Math.ceil((state.saveDue - Date.now()) / 1000));
+    el.textContent = `● יש שינויים שלא נשמרו · שמירה אוטומטית בעוד ${secs} שנ׳`;
+    el.classList.add('dirty');
+  } else if (state.lastSave) {
+    const who = state.lastSave.by ? ` · ${personName(state.lastSave.by)}` : '';
+    el.textContent = `✓ נשמר ${ago(state.lastSave.at)}${who}`;
+    el.title = new Date(state.lastSave.at).toLocaleString('he-IL');
+    el.classList.add('ok');
+  } else el.textContent = 'מעודכן מול GitHub';
+  if (nodes.saveBtn) {
+    nodes.saveBtn.disabled = !state.dirty || state.saving || !!state.whatIf;
+    nodes.saveBtn.classList.toggle('primary', !nodes.saveBtn.disabled);
+  }
   if (nodes.undoBtn) nodes.undoBtn.disabled = !state.history.length;
   if (nodes.redoBtn) nodes.redoBtn.disabled = !state.future.length;
 }
@@ -385,7 +470,7 @@ function renderToolbar() {
   nodes.saveBtn = h('button', { class: 'btn', onclick: saveNow }, 'שמירה');
   const owners = [['', 'כולם'], ['both', 'שניהם'], ...(state.doc.people || []).map((x) => [x.id, x.name])];
   return h('div', { class: 'toolbar' },
-    h('div', { class: 'tabs', role: 'tablist' }, tab('gantt', 'גאנט'), tab('week', 'השבוע'), tab('issues', `בעיות ובדיקות (${state.issues.length})`)),
+    h('div', { class: 'tabs', role: 'tablist' }, tab('gantt', 'גאנט'), tab('week', 'השבוע'), tab('issues', `בעיות ובדיקות (${state.issues.length})`), tab('log', 'יומן')),
     h('button', { class: 'btn primary', onclick: () => addTask() }, '+ משימה'),
     h('button', { class: 'btn', onclick: heading }, '+ כותרת'),
     nodes.undoBtn, nodes.redoBtn, nodes.saveBtn,
@@ -412,6 +497,7 @@ function renderToolbar() {
     h('div', { class: 'grow' }),
     h('button', { class: `btn ${state.whatIf ? 'on' : ''}`, onclick: toggleWhatIf }, 'בדיקת "מה אם"'),
     renderExportMenu(),
+    h('button', { class: 'btn', onclick: openShortcuts, title: 'כל הקיצורים ופעולות העכבר (?)' }, 'קיצורים'),
     h('button', { class: 'btn', onclick: () => { state.panel = 'settings'; state.selected = null; render(); } }, 'הגדרות'));
 }
 
@@ -534,7 +620,7 @@ function renderLegend() {
     tasks.some((t) => isMilestone(t) && !t.unverified) && item('dia', 'מועד'),
     tasks.some((t) => isMilestone(t) && t.unverified) && item('dia open', 'מועד לא מאומת'),
     (state.doc.blackouts || []).length > 0 && item('band', 'תקופה חסומה'),
-    h('span', { class: 'hint' }, 'לחיצה על שורה פותחת עריכה. גרירה בתרשים מזיזה את התאריך.'));
+    h('span', { class: 'hint' }, 'לחיצה פותחת עריכה · גרירה מזיזה את התאריך · גרירה מהעיגול שבקצה יוצרת תלות · ? לכל הקיצורים'));
 }
 
 function colorDot(key) {
@@ -590,6 +676,8 @@ function renderTableRow(row) {
     const roll = row.roll;
     return h('button', {
       class: 'row phase', 'aria-expanded': String(!collapsed),
+      dataset: { phase: row.phase.id },
+      ...rowDnd('phase', row.phase.id, true),
       onclick: () => {
         const list = state.prefs.collapsed;
         setPref('collapsed', collapsed ? list.filter((x) => x !== row.phase.id) : [...list, row.phase.id]);
@@ -610,6 +698,7 @@ function renderTableRow(row) {
   return h('button', {
     class: `row task ${state.selected === t.id ? 'sel' : ''}`,
     dataset: { row: t.id },
+    ...rowDnd('task', t.id, state.prefs.layout === 'list'),
     onclick: () => selectTask(t.id),
     onmouseenter: (e) => setHover(e.currentTarget, t.id),
     onmouseleave: (e) => setHover(e.currentTarget, null),
@@ -629,6 +718,65 @@ function renderTableRow(row) {
   h('span', { class: 'c-dates num' }, r ? (isMilestone(t) ? fmt(r.end) : `${fmtShort(r.start)}–${fmtShort(r.end)}`) : ''),
   h('span', { class: `c-slack num ${showSlack && r.slack < 0 ? 'bad' : ''}`, title: 'מרווח בימים עד שהמשימה פוגעת במועד' },
     showSlack && r.slack < 90 ? `${r.slack}` : ''));
+}
+
+// --- dragging table rows ---
+
+// Every row is a drop target; `draggable` decides which rows can be picked up.
+function rowDnd(kind, id, draggable) {
+  return {
+    draggable: draggable ? 'true' : undefined,
+    ondragstart: (e) => {
+      state.rowDrag = { kind, id };
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', id);
+      hideTooltip();
+    },
+    ondragover: (e) => {
+      const spot = dropSpot(e, kind, id);
+      if (!spot) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      clearDropMarks();
+      e.currentTarget.classList.add(`drop-${spot.where}`);
+    },
+    ondrop: (e) => {
+      const spot = dropSpot(e, kind, id);
+      clearDropMarks();
+      if (!spot) return;
+      e.preventDefault();
+      dropRow(spot);
+    },
+    ondragend: () => {
+      state.rowDrag = null;
+      clearDropMarks();
+    },
+  };
+}
+
+// A task lands before or after another task, or first under a heading; a
+// heading lands before or after another heading.
+function dropSpot(e, kind, id) {
+  const drag = state.rowDrag;
+  if (!drag || drag.id === id) return null;
+  const box = e.currentTarget.getBoundingClientRect();
+  const half = e.clientY < box.top + box.height / 2 ? 'before' : 'after';
+  if (drag.kind === 'task') return { drag, id, where: kind === 'task' ? half : 'into' };
+  return kind === 'phase' ? { drag, id, where: half } : null;
+}
+
+function dropRow({ drag, id, where }) {
+  state.rowDrag = null;
+  if (drag.kind === 'phase') {
+    commit((doc) => movePhase(doc, drag.id, { [where]: id }));
+    return;
+  }
+  if (where === 'into') state.prefs.collapsed = state.prefs.collapsed.filter((p) => p !== id);
+  commit((doc) => moveTaskTo(doc, drag.id, where === 'into' ? { phase: id, at: 'start' } : { [where]: id }));
+}
+
+function clearDropMarks() {
+  for (const el of document.querySelectorAll('.drop-before, .drop-after, .drop-into')) el.classList.remove('drop-before', 'drop-after', 'drop-into');
 }
 
 function setHover(rowEl, id) {
@@ -668,6 +816,7 @@ function renderGantt() {
   nodes.hover = body.hover;
   nodes.rowIndex = new Map(rows.filter((row) => row.kind === 'task').map((row) => [row.task.id, rows.indexOf(row)]));
   nodes.layout = L;
+  nodes.rows = rows;
 
   const head = s('svg', { class: 'head-svg', width: L.width, height: HEAD_H, role: 'img', 'aria-label': 'ציר זמן' });
   head.append(drawHeader(L, state.doc, P, todayDay));
@@ -721,14 +870,19 @@ function onChartPointerDown(event) {
   const task = taskById(id);
   if (!task) return;
   const r = state.sched.rows.get(id);
+  const part = event.target.closest('[data-part]')?.dataset.part;
   event.preventDefault();
   hideTooltip();
   nodes.svg.setPointerCapture(event.pointerId);
   state.drag = {
-    id, mode: event.target.dataset.part === 'end' && !isMilestone(task) ? 'resize' : 'move',
-    startX: event.clientX, moved: false, before: JSON.stringify(state.doc),
-    origStart: r.start, origEnd: r.end, floor: r.depFloor, lastDelta: 0, pointerType: event.pointerType,
+    id, mode: part === 'link' ? 'link' : part === 'end' && !isMilestone(task) ? 'resize' : 'move',
+    startX: event.clientX, startY: event.clientY, moved: false, before: JSON.stringify(state.doc),
+    origStart: r.start, origEnd: r.end, floor: r.depFloor, lastDelta: 0, pointerType: event.pointerType, targetPhase: null,
   };
+  if (state.drag.mode === 'link') {
+    const dot = event.target.closest('[data-part="link"]').lastElementChild.previousElementSibling;
+    state.drag.from = { x: Number(dot.getAttribute('cx')), y: Number(dot.getAttribute('cy')) };
+  }
   nodes.svg.addEventListener('pointermove', onDragMove);
   nodes.svg.addEventListener('pointerup', onDragEnd);
   nodes.svg.addEventListener('pointercancel', onDragCancel);
@@ -752,20 +906,109 @@ function onDragMove(event) {
   const d = state.drag;
   if (!d) return;
   const px = event.clientX - d.startX;
-  if (!d.moved && Math.abs(px) < 4) return;
+  const py = event.clientY - d.startY;
+  if (!d.moved && Math.abs(px) < 4 && Math.abs(py) < 4) return;
   // Touch can scroll the chart, so dragging by finger is left to the edit panel.
   if (d.pointerType === 'touch') return;
   d.moved = true;
+  if (d.mode === 'link') { moveLink(event); return; }
   const L = nodes.layout;
   const delta = Math.round((px * L.sign) / L.ppd);
-  if (delta === d.lastDelta) return;
+  const phase = d.mode === 'move' ? phaseUnder(event) : null;
+  if (delta === d.lastDelta && phase === d.targetPhase) return;
   d.lastDelta = delta;
+  d.targetPhase = phase;
   applyDrag(delta);
   redrawGantt();
+  markPhase(phase);
   const r = state.sched.rows.get(d.id);
   showTooltipAt(event.clientX, event.clientY, h('div', {},
     h('b', {}, taskName(taskById(d.id), 'he')),
-    h('span', { class: 'num' }, isMilestone(taskById(d.id)) ? fmt(r.end) : `${fmt(r.start)} – ${fmt(r.end)}`)));
+    h('span', { class: 'num' }, isMilestone(taskById(d.id)) ? fmt(r.end) : `${fmt(r.start)} – ${fmt(r.end)}`),
+    phase && h('div', {}, `תעבור לכותרת: ${phaseName(phase, 'he')}`)));
+}
+
+// In the layout by headings, dragging a task up or down into another heading
+// moves it there.
+function phaseUnder(event) {
+  if (state.prefs.layout !== 'heading' || !nodes.rows) return null;
+  const index = Math.floor((event.clientY - nodes.svg.getBoundingClientRect().top) / ROW_H);
+  const phase = nodes.rows[index]?.phase;
+  return phase && phase.id !== taskById(state.drag.id).phase ? phase : null;
+}
+
+function markPhase(phase) {
+  if (!phase) return;
+  const rows = nodes.rows.map((row, i) => (row.phase?.id === phase.id ? i : -1)).filter((i) => i >= 0);
+  nodes.svg.append(s('rect', {
+    x: 1, y: rows[0] * ROW_H + 1, width: nodes.layout.width - 2, height: rows.length * ROW_H - 2, rx: 4,
+    fill: 'none', stroke: PALETTES[themeName()].ink, 'stroke-width': 2, 'stroke-dasharray': '6 4', 'pointer-events': 'none',
+  }));
+  nodes.tbody.querySelector(`[data-phase="${CSS.escape(phase.id)}"]`)?.classList.add('drop-into');
+}
+
+// --- dragging a dependency from a task's end circle ---
+
+function linkTarget(event) {
+  const hit = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('.body-svg [data-task]');
+  const id = hit?.dataset.task;
+  return id && id !== state.drag.id ? id : null;
+}
+
+// Why a dependency can't be added, or null when it can.
+function linkProblem(fromId, toId) {
+  const to = taskById(toId);
+  if ((to.deps || []).some((x) => x.id === fromId)) return 'כבר תלויה בה';
+  if (wouldCreateCycle(state.doc, toId, fromId)) return 'אי אפשר: זו תהיה תלות מעגלית';
+  return null;
+}
+
+function moveLink(event) {
+  const d = state.drag;
+  const box = nodes.svg.getBoundingClientRect();
+  const x = event.clientX - box.left;
+  const y = event.clientY - box.top;
+  const P = PALETTES[themeName()];
+  nodes.svg.classList.add('linking');
+  nodes.linkLayer?.remove();
+  nodes.linkLayer = s('g', { 'pointer-events': 'none' });
+  d.target = linkTarget(event);
+  const problem = d.target && linkProblem(d.id, d.target);
+  if (d.target) {
+    const frame = nodes.svg.querySelector(`.bar[data-task="${CSS.escape(d.target)}"] > rect`)?.getBBox();
+    if (frame) {
+      nodes.linkLayer.append(s('rect', {
+        x: frame.x - 2, y: frame.y, width: frame.width + 4, height: frame.height, rx: 4,
+        fill: 'none', stroke: problem ? P.critical : P.ink, 'stroke-width': 2,
+      }));
+    }
+  }
+  nodes.linkLayer.append(s('path', {
+    d: `M${d.from.x},${d.from.y} L${x},${y}`, fill: 'none', stroke: problem ? P.critical : P.ink,
+    'stroke-width': 1.5, 'stroke-dasharray': '5 3',
+  }));
+  nodes.svg.append(nodes.linkLayer);
+  const from = taskName(taskById(d.id), 'he');
+  showTooltipAt(event.clientX, event.clientY, d.target
+    ? h('div', {}, h('b', {}, `"${taskName(taskById(d.target), 'he')}" תתחיל אחרי "${from}"`), problem && h('div', { class: 'warn' }, problem))
+    : h('div', {}, `גוררים אל המשימה שתתחיל אחרי "${from}"`));
+}
+
+function finishLink(d) {
+  const from = taskById(d.id);
+  const to = d.target && taskById(d.target);
+  if (!to) { render(); return; }
+  const problem = linkProblem(d.id, d.target);
+  if (problem) {
+    toast(problem);
+    render();
+    return;
+  }
+  commit((doc) => {
+    const x = doc.tasks.find((t) => t.id === d.target);
+    x.deps = [...(x.deps || []), { id: d.id }];
+  });
+  toast(`נוספה תלות: "${taskName(to, 'he')}" תתחיל אחרי "${taskName(from, 'he')}".`);
 }
 
 function endDragListeners() {
@@ -780,16 +1023,23 @@ function onDragEnd() {
   state.drag = null;
   hideTooltip();
   if (!d) return;
-  if (!d.moved) { selectTask(d.id); return; }
+  if (d.mode === 'link') {
+    if (d.moved) finishLink(d); else selectTask(d.id);
+    return;
+  }
+  if (!d.moved || (JSON.stringify(state.doc) === d.before && !d.targetPhase)) { selectTask(d.id); return; }
   const task = taskById(d.id);
   const r = state.sched.rows.get(d.id);
   if (d.mode === 'move' && !task.fixed && d.origStart + d.lastDelta < r.depFloor) {
     const blocker = r.drivenBy ? taskName(taskById(r.drivenBy), 'he') : 'משימה קודמת';
     toast(`אי אפשר להקדים: המשימה מחכה ל"${blocker}". אפשר להסיר את התלות בחלונית העריכה.`);
   }
-  state.history.push(d.before);
-  if (state.history.length > 60) state.history.shift();
-  state.future = [];
+  if (d.targetPhase) {
+    moveTaskTo(state.doc, d.id, { phase: d.targetPhase.id });
+    state.prefs.collapsed = state.prefs.collapsed.filter((p) => p !== d.targetPhase.id);
+    toast(`"${taskName(task, 'he')}" הועברה לכותרת "${phaseName(d.targetPhase, 'he')}".`);
+  }
+  recordChange(d.before);
   afterChange();
 }
 
@@ -798,6 +1048,7 @@ function onDragCancel() {
   endDragListeners();
   state.drag = null;
   hideTooltip();
+  nodes.linkLayer?.remove();
   if (d) {
     state.doc = JSON.parse(d.before);
     recompute();
@@ -821,11 +1072,55 @@ function redrawGantt() {
     selected: state.selected,
   });
   nodes.hover = body.hover;
+  nodes.rows = rows;
   nodes.svg.setAttribute('height', body.height);
   nodes.svg.replaceChildren(body.node);
   const tbody = nodes.tbody;
   tbody.replaceChildren(...renderTableRows(rows));
   nodes.svg.classList.add('dragging');
+}
+
+// Arrow keys move the selected task like a short drag.
+function nudgeTask(id, days) {
+  const t = taskById(id);
+  const r = state.sched.rows.get(id);
+  if (!t || !r) return;
+  const to = r.start + days;
+  if (!t.fixed && to < r.depFloor) {
+    const blocker = r.drivenBy ? taskName(taskById(r.drivenBy), 'he') : 'משימה קודמת';
+    toast(`אי אפשר להקדים: המשימה מחכה ל"${blocker}".`);
+    return;
+  }
+  commit((doc) => {
+    const x = doc.tasks.find((y) => y.id === id);
+    if (x.fixed) x.fixed = toIso(to); else x.start = toIso(to);
+  }, { group: `nudge:${id}` });
+}
+
+export function deleteTask(id) {
+  const t = taskById(id);
+  if (!t) return;
+  const dependents = state.doc.tasks.filter((x) => (x.deps || []).some((d) => d.id === id));
+  const notes = (state.doc.log || []).filter((e) => e.task === id).length;
+  const warn = [
+    dependents.length ? `${dependents.length} משימות תלויות בה, והתלות תוסר.` : '',
+    notes === 1 ? 'יש לה רישום אחד ביומן. הוא יישאר ביומן כרישום כללי.' : '',
+    notes > 1 ? `יש לה ${notes} רישומים ביומן. הם יישארו ביומן כרישומים כלליים.` : '',
+  ].filter(Boolean).map((line) => `\n${line}`).join('');
+  if (!confirm(`למחוק את "${t.name}"?${warn}`)) return;
+  if (state.selected === id) {
+    state.selected = null;
+    state.panel = null;
+  }
+  commit((doc) => {
+    doc.tasks = doc.tasks.filter((x) => x.id !== id);
+    for (const x of doc.tasks) if (x.deps) x.deps = x.deps.filter((d) => d.id !== id);
+    for (const e of doc.log || []) {
+      if (e.task !== id) continue;
+      delete e.task;
+      e.taskName = t.name;
+    }
+  });
 }
 
 function hideTooltip() {
@@ -982,7 +1277,7 @@ export function disconnect() {
   location.reload();
 }
 
-export { state, render, selectTask, setPref, themeName, applyTheme, savePrefs, fmt, fmtShort };
+export { state, render, selectTask, selectAndReveal, setPref, themeName, applyTheme, savePrefs, fmt, fmtShort };
 
 let firstGantt = true;
 
@@ -991,13 +1286,17 @@ function render() {
   const app = document.getElementById('app');
   const prevScroll = nodes.scroller ? { l: nodes.scroller.scrollLeft, t: nodes.scroller.scrollTop } : null;
   const drawerScroll = app.querySelector('.drawer')?.scrollTop;
-  const focusKey = document.activeElement?.dataset?.fieldKey;
+  const active = document.activeElement;
+  const focusKey = active?.dataset?.fieldKey;
+  const draft = focusKey && (active.tagName === 'TEXTAREA' || active.type === 'text')
+    ? { value: active.value, from: active.selectionStart, to: active.selectionEnd } : null;
   hideTooltip();
   const tab = state.prefs.tab;
   const main = h('div', { class: 'main' });
   nodes.scroller = null;
   if (tab === 'week') main.append(renderWeekPage());
   else if (tab === 'issues') main.append(renderIssuesPage());
+  else if (tab === 'log') main.append(renderLogPage());
   else {
     nodes.scroller = h('div', { class: 'scroller' }, renderGantt());
     main.append(nodes.scroller);
@@ -1023,7 +1322,12 @@ function render() {
   }
   const drawer = app.querySelector('.drawer');
   if (drawer && drawerScroll) drawer.scrollTop = drawerScroll;
-  if (focusKey) app.querySelector(`[data-field-key="${CSS.escape(focusKey)}"]`)?.focus();
+  const again = focusKey && app.querySelector(`[data-field-key="${CSS.escape(focusKey)}"]`);
+  again?.focus();
+  if (again && draft && again.value !== draft.value) {
+    again.value = draft.value;
+    again.setSelectionRange(draft.from, draft.to);
+  }
 }
 
 // --- connecting ---
@@ -1066,6 +1370,9 @@ async function start(token, remember) {
     applyTheme();
     render();
     refreshIssues();
+    refreshLastSave();
+    state.store.whoAmI().then((login) => { state.me = personFor(login); }).catch(() => { /* changes go unsigned */ });
+    setInterval(renderSync, 1000);
     setInterval(pollRemote, POLL_MS);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) pollRemote(); });
   } catch (err) {
@@ -1075,17 +1382,33 @@ async function start(token, remember) {
 }
 
 document.addEventListener('keydown', (event) => {
-  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName);
+  if (!state.doc) return;
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName) || event.target.isContentEditable;
+  if (event.key === 'Escape' && state.drag) { onDragCancel(); return; }
+  if (document.querySelector('dialog[open]')) return;
   if (event.key === 'Escape' && state.panel) {
     state.panel = null;
     state.selected = null;
     render();
     return;
   }
-  if (typing || !(event.ctrlKey || event.metaKey)) return;
-  if (event.key.toLowerCase() === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); }
-  if (event.key.toLowerCase() === 'y') { event.preventDefault(); redo(); }
-  if (event.key.toLowerCase() === 's') { event.preventDefault(); saveNow(); }
+  if (typing) return;
+  if (event.ctrlKey || event.metaKey) {
+    if (event.key.toLowerCase() === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); }
+    if (event.key.toLowerCase() === 'y') { event.preventDefault(); redo(); }
+    if (event.key.toLowerCase() === 's') { event.preventDefault(); saveNow(); }
+    return;
+  }
+  if (event.key === '?') { event.preventDefault(); openShortcuts(); return; }
+  const selected = state.panel === 'task' && state.selected && taskById(state.selected);
+  if (!selected || event.altKey) return;
+  if (event.key === 'Delete') { event.preventDefault(); deleteTask(selected.id); return; }
+  if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && state.prefs.tab === 'gantt') {
+    event.preventDefault();
+    // The arrow points where the task moves on screen; Hebrew charts run right to left.
+    const sign = nodes.layout?.sign ?? (state.prefs.lang === 'he' ? -1 : 1);
+    nudgeTask(selected.id, (event.key === 'ArrowRight' ? 1 : -1) * sign * (event.shiftKey ? 7 : 1));
+  }
 });
 
 window.addEventListener('beforeunload', (event) => {

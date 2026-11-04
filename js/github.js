@@ -9,7 +9,10 @@ export class StoreError extends Error {
 }
 
 function encode(text) {
-  const bytes = new TextEncoder().encode(text);
+  return encodeBytes(new TextEncoder().encode(text));
+}
+
+function encodeBytes(bytes) {
   let bin = '';
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(bin);
@@ -27,14 +30,16 @@ export class Store {
     this.repoPath = `/repos/${DATA.owner}/${DATA.repo}`;
   }
 
+  // `raw` asks for the file itself instead of JSON: 'text' or 'blob'.
   async request(path, options = {}) {
+    const { raw, ...init } = options;
     let res;
     try {
       res = await fetch(this.base + path, {
-        ...options,
+        ...init,
         cache: 'no-store',
         headers: {
-          Accept: 'application/vnd.github+json',
+          Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json',
           Authorization: `Bearer ${this.token}`,
           'X-GitHub-Api-Version': '2022-11-28',
           ...(options.body ? { 'Content-Type': 'application/json' } : {}),
@@ -43,6 +48,7 @@ export class Store {
     } catch {
       throw new StoreError('network', 'אין חיבור ל-GitHub. נסו שוב עוד רגע.');
     }
+    if (res.ok && raw) return raw === 'blob' ? res.blob() : res.text();
     if (res.ok) return res.status === 204 ? null : res.json();
     if (res.status === 401) throw new StoreError('auth', 'הטוקן לא תקף או שפג תוקפו.', 401);
     if (res.status === 403) throw new StoreError('forbidden', 'לטוקן אין הרשאה מספיקה, או שהוא עוד מחכה לאישור הארגון.', 403);
@@ -51,9 +57,36 @@ export class Store {
     throw new StoreError('other', `GitHub החזיר שגיאה ${res.status}.`, res.status);
   }
 
+  // GitHub leaves `content` empty for files over 1 MB, so a long work log
+  // is read again as the raw file.
   async load() {
-    const data = await this.request(`${this.repoPath}/contents/${DATA.path}?ref=${DATA.branch}`);
-    return { text: decode(data.content), sha: data.sha };
+    const path = `${this.repoPath}/contents/${DATA.path}?ref=${DATA.branch}`;
+    const data = await this.request(path);
+    const text = data.content ? decode(data.content) : await this.request(path, { raw: 'text' });
+    return { text, sha: data.sha };
+  }
+
+  async whoAmI() {
+    return (await this.request('/user')).login;
+  }
+
+  // When the data file was last saved, and by whom.
+  async lastSave() {
+    const list = await this.request(`${this.repoPath}/commits?sha=${DATA.branch}&path=${DATA.path}&per_page=1`);
+    const c = list[0];
+    return c ? { at: c.commit.committer?.date || c.commit.author?.date, login: c.author?.login || c.committer?.login || '' } : null;
+  }
+
+  // Files such as log images sit beside the data file on the same branch.
+  async putFile(path, bytes, message) {
+    await this.request(`${this.repoPath}/contents/${path}`, {
+      method: 'PUT',
+      body: JSON.stringify({ message, content: encodeBytes(bytes), branch: DATA.branch }),
+    });
+  }
+
+  async getFile(path) {
+    return this.request(`${this.repoPath}/contents/${path}?ref=${DATA.branch}`, { raw: 'blob' });
   }
 
   async save(text, sha, message) {

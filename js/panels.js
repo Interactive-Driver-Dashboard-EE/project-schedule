@@ -1,5 +1,5 @@
 import {
-  addTask, applyTheme, commit, createIssueFor, themeName, disconnect, fmt, personName, render, savePrefs, setPref, state, takeNewBaseline, taskById, toast, todayIso,
+  addTask, ago, applyTheme, commit, createIssueFor, deleteTask, themeName, disconnect, fmt, personName, render, savePrefs, setPref, state, takeNewBaseline, taskById, toast, todayIso,
 } from './app.js';
 import { h, s } from './dom.js';
 import {
@@ -7,6 +7,7 @@ import {
 } from './gantt.js';
 import { addDays, isMilestone, toDay, toIso, wouldCreateCycle } from './model.js';
 import { taskName } from './mspdi.js';
+import { renderTaskLog } from './worklog.js';
 
 const STATUS = [['todo', 'לא התחיל'], ['doing', 'בעבודה'], ['blocked', 'חסום'], ['done', 'הושלם']];
 const TRACKS = [['hw', 'חומרה'], ['fw', 'קושחה'], ['veh', 'רכב'], ['docs', 'מסמכים']];
@@ -222,16 +223,10 @@ function setStatus(id, value) {
   });
 }
 
-function moveTask(id, delta) {
-  commit((doc) => {
-    const i = doc.tasks.findIndex((t) => t.id === id);
-    const phase = doc.tasks[i].phase;
-    let j = i + delta;
-    while (j >= 0 && j < doc.tasks.length && doc.tasks[j].phase !== phase) j += delta;
-    if (j < 0 || j >= doc.tasks.length) return;
-    const [task] = doc.tasks.splice(i, 1);
-    doc.tasks.splice(j, 0, task);
-  });
+// "נוצרה: שהם · לפני שעתיים", with the exact time on hover.
+function stampLine(label, stamp) {
+  if (!stamp?.at) return null;
+  return h('div', { title: new Date(stamp.at).toLocaleString('he-IL') }, `${label}: ${personName(stamp.by)} · ${ago(stamp.at)}`);
 }
 
 export function renderTaskDrawer() {
@@ -277,6 +272,7 @@ export function renderTaskDrawer() {
       value: t.note || '', dataset: { fieldKey: 'note' },
       onchange: (e) => update(t.id, (x) => { x.note = e.target.value || undefined; }),
     })),
+    renderTaskLog(t),
     field('שם באנגלית (לדו"חות)', textInput('nameEn', t.nameEn, (v) => update(t.id, (x) => { x.nameEn = v || undefined; }), { dir: 'ltr' })),
     h('div', { class: 'f' },
       h('h3', {}, 'GitHub Issue'),
@@ -294,24 +290,55 @@ export function renderTaskDrawer() {
             onchange: (e) => { const n = Number(e.target.value); if (n > 0) update(t.id, (x) => { x.issue = n; }); },
           }))),
     h('div', { class: 'actions' },
-      h('button', { class: 'btn', onclick: () => moveTask(t.id, -1) }, 'למעלה'),
-      h('button', { class: 'btn', onclick: () => moveTask(t.id, 1) }, 'למטה'),
       h('button', { class: 'btn', onclick: () => addTask(t.phase) }, 'משימה חדשה אחריה'),
-      h('button', {
-        class: 'btn danger',
-        onclick: () => {
-          const dependents = state.doc.tasks.filter((x) => (x.deps || []).some((d) => d.id === t.id));
-          const warn = dependents.length ? `\n${dependents.length} משימות תלויות בה, והתלות תוסר.` : '';
-          if (!confirm(`למחוק את "${t.name}"?${warn}`)) return;
-          state.selected = null;
-          state.panel = null;
-          commit((doc) => {
-            doc.tasks = doc.tasks.filter((x) => x.id !== t.id);
-            for (const x of doc.tasks) if (x.deps) x.deps = x.deps.filter((d) => d.id !== t.id);
-          });
-        },
-      }, 'מחיקה')),
-    h('p', { class: 'hint' }, `מזהה: ${t.id}`));
+      h('button', { class: 'btn danger', onclick: () => deleteTask(t.id), title: 'מחיקה (Delete)' }, 'מחיקה')),
+    h('div', { class: 'hint stamps' },
+      stampLine('נוצרה', t.created),
+      stampLine('עודכנה לאחרונה', t.updated),
+      h('div', {}, `מזהה: ${t.id}`)));
+}
+
+const KEYS = [
+  ['Delete', 'מחיקת המשימה שבחרתם'],
+  ['← →', 'הזזת המשימה שבחרתם ביום, לכיוון החץ'],
+  ['Shift + ← →', 'הזזה בשבוע'],
+  ['Ctrl + Z', 'ביטול, אפשר כמה פעמים ברצף (עד 60 צעדים)'],
+  ['Ctrl + Y', 'שחזור מה שבוטל (גם Ctrl + Shift + Z)'],
+  ['Ctrl + S', 'שמירה עכשיו'],
+  ['Esc', 'סגירת החלונית, או ביטול גרירה באמצע'],
+  ['?', 'החלון הזה'],
+];
+
+const MOUSE = [
+  ['גרירת משימה בתרשים', 'שינוי התאריך'],
+  ['גרירת הקצה של משימה', 'שינוי המשך'],
+  ['גרירה מהעיגול שבקצה אל משימה אחרת', 'המשימה השנייה תתחיל אחרי הראשונה'],
+  ['גרירה למעלה או למטה בפריסה "לפי כותרות"', 'העברה לכותרת אחרת'],
+  ['גרירת שורה בטבלה בפריסה "שורה לכל משימה"', 'שינוי הסדר או הכותרת'],
+  ['גרירת כותרת בטבלה', 'שינוי סדר הכותרות'],
+  ['הדבקה (Ctrl + V) או גרירה של תמונה לרישום ביומן', 'הוספת תמונה לרישום'],
+];
+
+export function openShortcuts() {
+  if (document.querySelector('dialog.shortcuts')) return;
+  const table = (rows, keys) => h('table', {}, h('tbody', {}, rows.map(([what, does]) => h('tr', {},
+    h('th', {}, keys ? h('kbd', {}, what) : what),
+    h('td', {}, does)))));
+  const dlg = h('dialog', {
+    class: 'shortcuts', 'aria-label': 'קיצורים ופעולות עכבר',
+    onclose: () => dlg.remove(),
+    onclick: (e) => { if (e.target === dlg) dlg.close(); },
+  }, h('div', { class: 'dialog-body' },
+    h('div', { class: 'drawer-head' },
+      h('h2', { class: 'grow' }, 'קיצורים ופעולות עכבר'),
+      h('button', { class: 'icon-btn', onclick: () => dlg.close() }, 'סגירה')),
+    h('h3', {}, 'מקלדת'),
+    table(KEYS, true),
+    h('h3', {}, 'עכבר'),
+    table(MOUSE, false),
+    h('p', { class: 'hint' }, 'הקיצורים לא פועלים בזמן כתיבה בשדה. Delete והחצים פועלים על המשימה שפתוחה בחלונית.')));
+  document.body.append(dlg);
+  dlg.showModal();
 }
 
 export function renderSettings() {

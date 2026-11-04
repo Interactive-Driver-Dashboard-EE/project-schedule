@@ -242,7 +242,7 @@ export function weekSummary(doc, sched, todayIso) {
 
 // Three-way merge keyed by id, so two partners editing different tasks both
 // keep their work. When both changed the same record, `mine` wins and it is reported.
-const KEYED = ['tasks', 'phases', 'blackouts', 'baselines', 'people'];
+const KEYED = ['tasks', 'phases', 'blackouts', 'baselines', 'people', 'log'];
 
 export function mergeDocs(base, mine, theirs) {
   const merged = structuredClone(theirs);
@@ -254,6 +254,7 @@ export function mergeDocs(base, mine, theirs) {
     if (!same(base[key], mine[key])) merged[key] = mine[key];
   }
   for (const key of KEYED) {
+    if (!base[key] && !mine[key] && !theirs[key]) continue;
     const b = new Map((base[key] || []).map((x) => [x.id, x]));
     const m = new Map((mine[key] || []).map((x) => [x.id, x]));
     const t = new Map((theirs[key] || []).map((x) => [x.id, x]));
@@ -276,6 +277,59 @@ export function mergeDocs(base, mine, theirs) {
     merged[key] = ordered;
   }
   return { merged, conflicts };
+}
+
+// Records who added each task and log entry, and who changed it last. Only the
+// latest change is kept, so the file does not grow with every edit.
+const STAMPED = ['tasks', 'log'];
+
+function contentOf(record) {
+  const { created, updated, ...rest } = record;
+  return JSON.stringify(rest);
+}
+
+export function stampChanges(before, after, by, at) {
+  if (!by) return after;
+  for (const key of STAMPED) {
+    const old = new Map((before[key] || []).map((x) => [x.id, contentOf(x)]));
+    for (const x of after[key] || []) {
+      if (!old.has(x.id)) {
+        if (!x.created) x.created = { by, at };
+      } else if (old.get(x.id) !== contentOf(x)) {
+        x.updated = { by, at };
+      }
+    }
+  }
+  return after;
+}
+
+// Moves a task next to another one (taking that one's heading), or to the start
+// or end of a heading. Order only matters among tasks of the same heading.
+export function moveTaskTo(doc, id, { before, after, phase, at = 'end' } = {}) {
+  const from = doc.tasks.findIndex((t) => t.id === id);
+  if (from < 0 || id === before || id === after) return;
+  const [task] = doc.tasks.splice(from, 1);
+  const anchorId = before || after;
+  const anchor = anchorId && doc.tasks.findIndex((t) => t.id === anchorId);
+  if (anchorId && anchor >= 0) {
+    task.phase = doc.tasks[anchor].phase;
+    doc.tasks.splice(after ? anchor + 1 : anchor, 0, task);
+    return;
+  }
+  if (phase) task.phase = phase;
+  const inPhase = doc.tasks.map((t, i) => (t.phase === task.phase ? i : -1)).filter((i) => i >= 0);
+  if (!inPhase.length) doc.tasks.push(task);
+  else if (at === 'start') doc.tasks.splice(inPhase[0], 0, task);
+  else doc.tasks.splice(inPhase[inPhase.length - 1] + 1, 0, task);
+}
+
+export function movePhase(doc, id, { before, after } = {}) {
+  const from = doc.phases.findIndex((p) => p.id === id);
+  if (from < 0 || id === before || id === after) return;
+  const [phase] = doc.phases.splice(from, 1);
+  const anchor = doc.phases.findIndex((p) => p.id === (before || after));
+  if (anchor < 0) doc.phases.push(phase);
+  else doc.phases.splice(after ? anchor + 1 : anchor, 0, phase);
 }
 
 // Working days a task needs in order to finish on `endDay` when it starts on `startDay`.

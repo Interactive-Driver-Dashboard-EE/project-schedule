@@ -312,14 +312,24 @@ export function layoutRows(doc, sched, L, layout, { match = () => true, collapse
   return rows;
 }
 
-function drawMilestone(g, L, t, r, y, P, late, selected) {
+// A small circle at the upper corner where a mark ends, above where its name
+// is written. Dragging it onto another task makes that task start after this one.
+function linkHandle(t, cx, cy, P) {
+  const g = s('g', { class: 'link-handle', dataset: { task: t.id, part: 'link' } });
+  g.append(s('circle', { cx, cy, r: 7, fill: 'transparent' }));
+  g.append(s('circle', { cx, cy, r: 4, fill: P.surface, stroke: P.ink, 'stroke-width': 1.5 }));
+  g.append(s('title', {}, 'גרירה אל משימה אחרת: היא תתחיל אחרי זו'));
+  return g;
+}
+
+function drawMilestone(g, L, t, r, y, P, late, selected, interactive) {
   const cx = L.x(r.end + 0.5);
   const cy = y + ROW_H / 2;
   const size = markSize(t);
   const color = (t.color && P.named[t.color]) || (t.type === 'milestone' ? (P.tracks[t.track] || P.ink2) : P.ink);
   const hollow = t.unverified || t.decision;
   const faded = t.status === 'done' && !t.color;
-  const part = s('g', { dataset: { task: t.id, part: 'bar' }, class: 'bar' });
+  const part = s('g', { dataset: { task: t.id, part: 'bar' }, class: selected ? 'bar sel' : 'bar' });
   part.append(s('rect', { x: cx - size - 6, y, width: (size + 6) * 2, height: ROW_H, fill: 'transparent' }));
   if (late) part.append(markShape(t.shape, cx, cy, size + 3, { fill: 'none', stroke: P.critical, 'stroke-width': 2 }));
   part.append(markShape(t.shape, cx, cy, size, {
@@ -331,7 +341,8 @@ function drawMilestone(g, L, t, r, y, P, late, selected) {
   if (hasEmphasis(t, 'frame')) part.append(markShape(t.shape, cx, cy, size + 2, { fill: 'none', stroke: P.ink, 'stroke-width': 2.5 }));
   if (selected) part.append(markShape(t.shape, cx, cy, size + 5, { fill: 'none', stroke: P.ink, 'stroke-width': 1.5 }));
   g.append(part);
-  drawLabel(g, L, milestoneText(t, r, L), cx - size - 1, cx + size + 1, cy + 4, P, labelWeight(t), hasEmphasis(t, 'marker'));
+  drawLabel(part, L, milestoneText(t, r, L), cx - size - 1, cx + size + 1, cy + 4, P, labelWeight(t), hasEmphasis(t, 'marker'));
+  if (interactive) part.append(linkHandle(t, cx + L.sign * (size + 3), y + 5, P));
 }
 
 function drawBar(g, L, t, r, y, P, opts, late) {
@@ -341,7 +352,7 @@ function drawBar(g, L, t, r, y, P, opts, late) {
   const top = y + (large ? 4 : 7);
   const height = ROW_H - (large ? 8 : 14);
   const shape = (x, yy, w, hh, attrs) => barShape(L, t.shape, x, yy, w, hh, attrs);
-  const part = s('g', { dataset: { task: t.id, part: 'bar' }, class: 'bar' });
+  const part = s('g', { dataset: { task: t.id, part: 'bar' }, class: opts.selected === t.id ? 'bar sel' : 'bar' });
   part.append(s('rect', { x: left - 2, y: y + 2, width: width + 4, height: ROW_H - 4, fill: 'transparent' }));
   const done = t.status === 'done';
   part.append(shape(left, top, width, height, {
@@ -373,7 +384,8 @@ function drawBar(g, L, t, r, y, P, opts, late) {
     }));
   }
   g.append(part);
-  drawLabel(g, L, taskName(t, L.lang), left, left + width, y + (ROW_H / 2) + 4, P, labelWeight(t, 400), hasEmphasis(t, 'marker'));
+  drawLabel(part, L, taskName(t, L.lang), left, left + width, y + (ROW_H / 2) + 4, P, labelWeight(t, 400), hasEmphasis(t, 'marker'));
+  if (opts.interactive) part.append(linkHandle(t, L.sign > 0 ? left + width + 4 : left - 4, Math.max(top - 2, y + 4), P));
 }
 
 const rowTasks = (row) => (row.kind === 'task' ? [row.task] : row.items || []);
@@ -466,7 +478,7 @@ export function drawBody(L, doc, sched, rows, P, opts) {
     for (const t of rowTasks(row)) {
       const r = sched.rows.get(t.id);
       if (!r) continue;
-      if (isMilestone(t)) drawMilestone(root, L, t, r, y, P, opts.lateMilestones?.has(t.id), opts.selected === t.id);
+      if (isMilestone(t)) drawMilestone(root, L, t, r, y, P, opts.lateMilestones?.has(t.id), opts.selected === t.id, opts.interactive);
       else drawBar(root, L, t, r, y, P, opts, lateOf(t, r));
     }
   });
