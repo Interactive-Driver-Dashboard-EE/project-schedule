@@ -544,7 +544,7 @@ try {
     assert.ok(await taskOf('T004'));
   });
 
-  await step('a log entry with hours and a pasted picture saves, and shows on the log page', async () => {
+  await step('a log entry with hours and text saves, and shows on the log page', async () => {
     const r = await barRect('T001');
     await click(r.x, r.y);
     await clickButton('+ רישום ביומן');
@@ -553,23 +553,11 @@ try {
     assert.equal(await evaluate(`document.activeElement?.dataset.fieldKey`), `log-${id}-text`, 'the new entry is ready to type in');
     await setField(`log-${id}-text`, 'חיווט ראשון של הלוח');
     await setField(`log-${id}-hours`, '2.5');
-    await evaluate(`(async () => {
-      const c = document.createElement('canvas'); c.width = 2400; c.height = 1200;
-      const g = c.getContext('2d'); g.fillStyle = '#2a78d6'; g.fillRect(0, 0, 2400, 1200);
-      const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
-      const dt = new DataTransfer();
-      dt.items.add(new File([blob], 'board.png', { type: 'image/png' }));
-      document.querySelector('[data-field-key="log-${id}-text"]').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
-    })()`);
-    for (let i = 0; i < 40 && !(await app(`a.state.doc.log.at(-1).images?.length || 0`)); i++) await sleep(100);
     const entry = await app(`a.state.doc.log.at(-1)`);
     assert.equal(entry.task, 'T001');
     assert.equal(entry.by, 'p1');
     assert.equal(entry.hours, 2.5);
-    assert.equal(entry.images.length, 1);
-    assert.match(entry.images[0].path, /^log-files\/\d{4}\/l.+\.jpg$/);
-    assert.ok((await mockState()).files.includes(entry.images[0].path), 'the picture was uploaded beside the data');
-    assert.match(await evaluate(`document.querySelector('.drawer .thumb img').src`), /^blob:/);
+    assert.equal(await evaluate(`!!document.querySelector('.drawer input[type=file]')`), false, 'the log takes no pictures');
     assert.match(await evaluate(`document.querySelector('.drawer').innerText`), /יומן עבודה \(רישום אחד · 2\.5 שעות\)/);
     await shot('18-log-panel');
     await clickButton('שמירה');
@@ -590,7 +578,6 @@ try {
     await sleep(100);
     const copied = await evaluate(`navigator.clipboard.readText()`);
     assert.match(copied, /- Alex, 2\.5 שעות · .+: חיווט ראשון של הלוח/);
-    assert.match(copied, /תמונה: https:\/\/github\.com\/.+\/blob\/schedule-data\/log-files\//);
     await shot('19-log-page');
     await evaluate(`document.querySelector('[role=tablist] button:nth-child(1)').click()`);
     await sleep(100);
