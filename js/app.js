@@ -42,6 +42,7 @@ const state = {
   prefs: loadPrefs(),
   selected: null,
   panel: null, // 'task' | 'settings'
+  toolsOpen: false, // on a phone, whether the full toolbar is showing
   history: [],
   future: [],
   dirty: false,
@@ -472,33 +473,40 @@ function renderToolbar() {
   return h('div', { class: 'toolbar' },
     h('div', { class: 'tabs', role: 'tablist' }, tab('gantt', 'גאנט'), tab('week', 'השבוע'), tab('issues', `בעיות ובדיקות (${state.issues.length})`), tab('log', 'יומן')),
     h('button', { class: 'btn primary', onclick: () => addTask() }, '+ משימה'),
-    h('button', { class: 'btn', onclick: heading }, '+ כותרת'),
-    nodes.undoBtn, nodes.redoBtn, nodes.saveBtn,
-    p.tab === 'gantt' && h('span', { class: 'field-inline' }, 'תצוגה',
-      h('div', { class: 'tabs' }, zoom('week', 'שבועות'), zoom('month', 'חודשים'), zoom('all', 'כל השנה'))),
-    p.tab === 'gantt' && h('span', { class: 'field-inline' }, 'פריסה',
-      h('div', { class: 'tabs' },
-        [['heading', 'לפי כותרות'], ['together', 'הכול יחד'], ['list', 'שורה לכל משימה']].map(([key, label]) => h('button', {
-          'aria-pressed': String(p.layout === key), onclick: () => setPref('layout', key),
-        }, label)))),
-    p.tab === 'gantt' && h('button', { class: 'btn', onclick: () => scrollToDay(toDay(todayIso())) }, 'להיום'),
-    h('label', { class: 'field-inline' }, 'אחראי',
-      h('select', { onchange: (e) => setPref('owner', e.target.value) },
-        owners.map(([v, l]) => h('option', { value: v, selected: p.owner === v }, l)))),
-    h('label', { class: 'field-inline' }, 'מסלול',
-      h('select', { onchange: (e) => setPref('track', e.target.value) },
-        [['', 'הכול'], ['hw', 'חומרה'], ['fw', 'קושחה'], ['veh', 'רכב'], ['docs', 'מסמכים']].map(([v, l]) => h('option', { value: v, selected: p.track === v }, l)))),
-    h('input', {
-      type: 'search', placeholder: 'חיפוש…', value: p.query, 'aria-label': 'חיפוש משימה',
-      onchange: (e) => setPref('query', e.target.value),
-    }),
-    p.tab === 'gantt' && toggle('showDeps', 'קווי תלות'),
-    p.tab === 'gantt' && (state.doc.baselines || []).length > 0 && toggle('showBaseline', 'קו בסיס'),
-    h('div', { class: 'grow' }),
-    h('button', { class: `btn ${state.whatIf ? 'on' : ''}`, onclick: toggleWhatIf }, 'בדיקת "מה אם"'),
-    renderExportMenu(),
-    h('button', { class: 'btn', onclick: openShortcuts, title: 'כל הקיצורים ופעולות העכבר (?)' }, 'קיצורים'),
-    h('button', { class: 'btn', onclick: () => { state.panel = 'settings'; state.selected = null; render(); } }, 'הגדרות'));
+    // On a phone the rest of the toolbar folds behind this button. On a wider
+    // screen the button is hidden and everything shows as before.
+    h('button', {
+      class: `btn tools-toggle ${state.toolsOpen ? 'on' : ''}`, 'aria-expanded': String(state.toolsOpen),
+      onclick: () => { state.toolsOpen = !state.toolsOpen; render(); },
+    }, state.toolsOpen ? 'פחות ▴' : 'עוד כלים ▾'),
+    h('div', { class: `toolbar-more ${state.toolsOpen ? 'open' : ''}` },
+      h('button', { class: 'btn', onclick: heading }, '+ כותרת'),
+      nodes.undoBtn, nodes.redoBtn, nodes.saveBtn,
+      p.tab === 'gantt' && h('span', { class: 'field-inline' }, 'תצוגה',
+        h('div', { class: 'tabs' }, zoom('week', 'שבועות'), zoom('month', 'חודשים'), zoom('all', 'כל השנה'))),
+      p.tab === 'gantt' && h('span', { class: 'field-inline' }, 'פריסה',
+        h('div', { class: 'tabs' },
+          [['heading', 'לפי כותרות'], ['together', 'הכול יחד'], ['list', 'שורה לכל משימה']].map(([key, label]) => h('button', {
+            'aria-pressed': String(p.layout === key), onclick: () => setPref('layout', key),
+          }, label)))),
+      p.tab === 'gantt' && h('button', { class: 'btn', onclick: () => scrollToDay(toDay(todayIso())) }, 'להיום'),
+      h('label', { class: 'field-inline' }, 'אחראי',
+        h('select', { onchange: (e) => setPref('owner', e.target.value) },
+          owners.map(([v, l]) => h('option', { value: v, selected: p.owner === v }, l)))),
+      h('label', { class: 'field-inline' }, 'מסלול',
+        h('select', { onchange: (e) => setPref('track', e.target.value) },
+          [['', 'הכול'], ['hw', 'חומרה'], ['fw', 'קושחה'], ['veh', 'רכב'], ['docs', 'מסמכים']].map(([v, l]) => h('option', { value: v, selected: p.track === v }, l)))),
+      h('input', {
+        type: 'search', placeholder: 'חיפוש…', value: p.query, 'aria-label': 'חיפוש משימה',
+        onchange: (e) => setPref('query', e.target.value),
+      }),
+      p.tab === 'gantt' && toggle('showDeps', 'קווי תלות'),
+      p.tab === 'gantt' && (state.doc.baselines || []).length > 0 && toggle('showBaseline', 'קו בסיס'),
+      h('div', { class: 'grow' }),
+      h('button', { class: `btn ${state.whatIf ? 'on' : ''}`, onclick: toggleWhatIf }, 'בדיקת "מה אם"'),
+      renderExportMenu(),
+      h('button', { class: 'btn', onclick: openShortcuts, title: 'כל הקיצורים ופעולות העכבר (?)' }, 'קיצורים'),
+      h('button', { class: 'btn', onclick: () => { state.panel = 'settings'; state.selected = null; render(); } }, 'הגדרות')));
 }
 
 function renderExportMenu() {
@@ -613,14 +621,15 @@ function renderLegend() {
   const item = (cls, label) => h('span', {}, h('i', { class: `swatch ${cls}` }), label);
   const tracks = [['hw', 'חומרה'], ['fw', 'קושחה'], ['veh', 'רכב'], ['docs', 'מסמכים']]
     .filter(([key]) => bars.some((t) => t.track === key && !t.color));
-  return h('div', { class: 'legend' },
+  return h('div', { class: `legend ${state.toolsOpen ? 'open' : ''}` },
     tracks.map(([key, label]) => item(key, label)),
     bars.some((t) => t.external) && item('ext', 'תלוי בגורם חיצוני'),
     bars.some((t) => t.status !== 'done' && state.sched.rows.get(t.id)?.slack < 0) && item('late', 'חורגת ממועד'),
     tasks.some((t) => isMilestone(t) && !t.unverified) && item('dia', 'מועד'),
     tasks.some((t) => isMilestone(t) && t.unverified) && item('dia open', 'מועד לא מאומת'),
     (state.doc.blackouts || []).length > 0 && item('band', 'תקופה חסומה'),
-    h('span', { class: 'hint' }, 'לחיצה פותחת עריכה · גרירה מזיזה את התאריך · גרירה מהעיגול שבקצה יוצרת תלות · ? לכל הקיצורים'));
+    h('span', { class: 'hint hint-mouse' }, 'לחיצה פותחת עריכה · גרירה מזיזה את התאריך · גרירה מהעיגול שבקצה יוצרת תלות · ? לכל הקיצורים'),
+    h('span', { class: 'hint hint-touch' }, 'נגיעה במשימה פותחת עריכה, ושם משנים תאריכים ותלויות · גוללים את התרשים באצבע'));
 }
 
 function colorDot(key) {

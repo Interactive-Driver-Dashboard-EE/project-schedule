@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const dataPath = process.argv[2] || join(root, 'dev', 'fixture.json');
 const port = Number(process.argv[3] || 8765);
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
 
 let text = await readFile(dataPath, 'utf8');
 let sha = hash(text);
