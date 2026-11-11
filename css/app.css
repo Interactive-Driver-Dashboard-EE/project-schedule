@@ -88,7 +88,7 @@ a { color: var(--accent); }
 .num { font-variant-numeric: tabular-nums; direction: ltr; unicode-bidi: isolate; }
 .grow { flex: 1 1 auto; min-width: 0; }
 
-#app { height: 100%; display: flex; flex-direction: column; min-height: 0; overflow: clip; }
+#app { height: 100%; height: 100dvh; display: flex; flex-direction: column; min-height: 0; overflow: clip; }
 
 .topbar { display: flex; align-items: center; gap: 12px; padding: 10px 16px 8px; flex-wrap: wrap; }
 .topbar h1 { font-size: 17px; margin: 0; font-weight: 700; }
@@ -118,6 +118,9 @@ select, input[type="text"], input[type="search"], input[type="number"], input[ty
 }
 input[type="date"], input[type="number"] { direction: ltr; }
 input[type="search"] { width: 120px; }
+.toolbar-more { display: contents; }
+.tools-toggle { display: none; }
+.legend .hint-touch { display: none; }
 .check { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer; white-space: nowrap; }
 
 .banner { margin: 0 16px 8px; padding: 8px 12px; border-radius: 8px; background: var(--warning-bg); color: var(--warning-ink); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; }
@@ -241,9 +244,51 @@ input[type="search"] { width: 120px; }
   .kpis { width: 100%; flex-wrap: nowrap; overflow-x: auto; }
   .kpi { flex: none; }
   .toolbar { flex-wrap: nowrap; overflow-x: auto; }
-  .toolbar > * { flex: none; }
-  .toolbar > .grow { display: none; }
+  .toolbar > *, .toolbar-more > * { flex: none; }
+  .toolbar > .grow, .toolbar-more > .grow { display: none; }
   .menu { position: fixed; inset-inline: 16px; top: auto; }
+}
+
+/* Phones: the toolbar folds behind "עוד כלים", nothing is removed */
+@media (max-width: 700px) {
+  .topbar { padding: 8px 10px 6px; gap: 6px 10px; }
+  .topbar h1 { font-size: 16px; }
+  .topbar > .grow { display: none; }
+  .kpis { margin-inline: -10px; padding-inline: 10px; }
+  .toolbar { flex-wrap: wrap; overflow: visible; padding: 0 10px 6px; gap: 6px; }
+  .toolbar > .tabs { width: 100%; display: flex; }
+  .toolbar > .tabs button { flex: 1 1 auto; padding-inline: 6px; }
+  .toolbar > .btn.primary { flex: 1 1 0; }
+  .toolbar > .tools-toggle { display: inline-block; flex: 1 1 0; }
+  .toolbar-more { display: none; }
+  .toolbar-more.open { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; padding: 8px; border: 1px solid var(--grid); border-radius: 10px; background: var(--surface); }
+  .toolbar-more > * { flex: none; }
+  .toolbar-more > .grow { display: none; }
+  .toolbar-more input[type="search"] { flex: 1 1 140px; width: auto; }
+  .toolbar-more .field-inline { flex-wrap: wrap; }
+  .legend { display: none; padding-inline: 10px; }
+  .legend.open { display: flex; }
+  .banner { margin-inline: 10px; }
+  .drawer { padding: 12px; }
+  .page { padding: 12px; }
+  .grid2 { gap: 8px; }
+  dialog { max-width: calc(100vw - 16px); max-height: calc(100dvh - 32px); }
+  .shortcuts th { white-space: normal; width: 40%; }
+  .gate { padding: 16px 10px; }
+  .gate-card { padding: 16px; }
+  #toasts { inset-inline: 10px; bottom: 10px; max-width: none; }
+}
+
+/* Touch screens: bigger targets, and inputs at 16px so iOS doesn't zoom in on focus */
+@media (pointer: coarse) {
+  .legend .hint-mouse { display: none; }
+  .legend .hint-touch { display: inline; }
+  .btn, .tabs button, .icon-btn, .style-opt { min-height: 38px; }
+  .menu button { padding: 11px 12px; }
+  .check { min-height: 38px; }
+  .check input { width: 20px; height: 20px; }
+  select, input[type="text"], input[type="search"], input[type="number"], input[type="date"], input[type="password"], textarea,
+  .f input, .f select, .f textarea, .log-entry textarea { font-size: 16px; min-height: 38px; }
 }
 
 @media (forced-colors: active) {

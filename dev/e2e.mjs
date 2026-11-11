@@ -623,6 +623,16 @@ try {
     await openPage();
     assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true);
     await shot('10-phone');
+    // On a phone the rest of the toolbar folds behind one button, and every control is still there.
+    const visible = (label) => `[...document.querySelectorAll('.toolbar button')].some((b) => b.textContent.trim() === ${JSON.stringify(label)} && b.offsetParent)`;
+    assert.equal(await evaluate(visible('הגדרות')), false);
+    await evaluate(`document.querySelector('.tools-toggle').click()`);
+    await sleep(200);
+    for (const label of ['+ כותרת', 'ביטול', 'שחזור', 'שמירה', 'להיום', 'ייצוא', 'קיצורים', 'הגדרות', 'בדיקת "מה אם"']) {
+      assert.equal(await evaluate(visible(label)), true, `${label} is reachable on a phone`);
+    }
+    assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true);
+    await shot('10-phone-tools');
     await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   });
 
