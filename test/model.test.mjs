@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   schedule, toDay, toIso, findIssues, mergeDocs, wouldCreateCycle, weekSummary, validateDoc, addDays,
-  stampChanges, moveTaskTo, movePhase, endFor,
+  stampChanges, moveTaskTo, movePhase, endFor, expenseSummary,
 } from '../js/model.js';
 
 const base = (tasks, extra = {}) => ({ projectStart: '2027-01-01', phases: [], tasks, ...extra });
@@ -289,4 +289,47 @@ test('the end of a finished task follows its start and duration', () => {
   assert.equal(endFor({ owner: 'p2' }, doc, '2027-01-01', 7), '2027-01-07');
   assert.equal(endFor({ owner: 'p1' }, doc, '2027-01-01', 7), '2027-01-10');
   assert.equal(endFor({ owner: 'p1' }, doc, '2027-01-04', 1), '2027-01-06');
+});
+
+test('expenses added on both sides are both kept, and an edit against a delete is not lost', () => {
+  const b = base([], { expenses: [{ id: 'e0', title: 'resistors', amount: 12 }] });
+  const mine = structuredClone(b); mine.expenses.push({ id: 'e1', title: 'PCB', amount: 80 });
+  const theirs = structuredClone(b); theirs.expenses.push({ id: 'e2', title: 'cable', amount: 5 });
+  const { merged, conflicts } = mergeDocs(b, mine, theirs);
+  assert.deepEqual(merged.expenses.map((x) => x.id), ['e0', 'e1', 'e2']);
+  assert.equal(conflicts.length, 0);
+  const gone = structuredClone(b); gone.expenses = [];
+  const edited = structuredClone(b); edited.expenses[0].amount = 15;
+  const second = mergeDocs(b, gone, edited);
+  assert.equal(second.merged.expenses[0].amount, 15);
+  assert.equal(second.conflicts.length, 1);
+  assert.equal('expenses' in mergeDocs(base([]), base([]), base([])).merged, false);
+});
+
+test('stamps mark who added an expense', () => {
+  const before = base([]);
+  const after = structuredClone(before);
+  after.expenses = [{ id: 'e1', title: 'PCB' }];
+  stampChanges(before, after, 'p2', '2027-01-01T10:00Z');
+  assert.deepEqual(after.expenses[0].created, { by: 'p2', at: '2027-01-01T10:00Z' });
+});
+
+test('expense totals stay per currency and separate spent, planned and owed', () => {
+  const sum = expenseSummary([
+    { amount: 100, currency: 'ILS', status: 'paid', paidBy: 'p1', category: 'parts' },
+    { amount: 50.5, status: 'reimbursed', paidBy: 'p2', category: 'pcb' },
+    { amount: 30, status: 'paid', paidBy: 'dept', category: 'parts' },
+    { amount: 200, status: 'planned', paidBy: 'p1', category: 'tools' },
+    { amount: 20, currency: 'USD', status: 'paid', paidBy: 'p2' },
+    { title: 'no price yet', status: 'paid', paidBy: 'p1' },
+    { amount: -5, status: 'paid' },
+  ]);
+  assert.deepEqual(Object.keys(sum).sort(), ['ILS', 'USD']);
+  assert.equal(sum.ILS.spent, 180.5);
+  assert.equal(sum.ILS.planned, 200);
+  assert.equal(sum.ILS.owed, 100, 'only what a person paid and did not get back');
+  assert.deepEqual(sum.ILS.byCategory, { parts: 130, pcb: 50.5 });
+  assert.deepEqual(sum.ILS.byPayer, { p1: 100, p2: 50.5, dept: 30 });
+  assert.equal(sum.USD.spent, 20);
+  assert.equal(sum.USD.byCategory.other, 20);
 });

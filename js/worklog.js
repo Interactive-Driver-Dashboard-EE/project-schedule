@@ -131,7 +131,7 @@ function logText(list) {
 }
 
 // Spreadsheets run cells that start with = + - @ as formulas, so those get a leading quote.
-function csvCell(value) {
+export function csvCell(value) {
   let text = String(value ?? '');
   if (/^[=+\-@]/.test(text)) text = `'${text}`;
   return `"${text.replace(/"/g, '""')}"`;
