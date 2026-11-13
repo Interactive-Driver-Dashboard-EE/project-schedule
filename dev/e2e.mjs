@@ -583,6 +583,64 @@ try {
     await sleep(100);
   });
 
+  await step('an expense with a price, payer and link saves, and the expenses page sums it', async () => {
+    const r = await barRect('T001');
+    await click(r.x, r.y);
+    await clickButton('+ הוצאה');
+    await sleep(100);
+    const id = await app(`a.state.doc.expenses.at(-1).id`);
+    assert.equal(await evaluate(`document.activeElement?.dataset.fieldKey`), `exp-${id}-title`, 'the new expense is ready to type in');
+    await setField(`exp-${id}-title`, 'מסך 4.3 אינץ׳');
+    await setField(`exp-${id}-amount`, '120.5');
+    await setField(`exp-${id}-vendor`, 'AliExpress');
+    await setField(`exp-${id}-link`, 'javascript:alert(1)');
+    assert.equal(await app(`a.state.doc.expenses.at(-1).link`), undefined, 'only web links are kept');
+    await setField(`exp-${id}-link`, 'https://example.com/order/1');
+    await setField(`exp-${id}-note`, 'שתי יחידות');
+    const e = await app(`a.state.doc.expenses.at(-1)`);
+    assert.equal(e.task, 'T001');
+    assert.equal(e.paidBy, 'p1');
+    assert.equal(e.amount, 120.5);
+    assert.equal(e.status, 'paid');
+    assert.equal(e.currency, 'ILS');
+    assert.equal(await evaluate(`document.querySelector('.drawer a.icon-btn[href="https://example.com/order/1"]')?.rel`), 'noopener noreferrer');
+    assert.match(await evaluate(`document.querySelector('.drawer').innerText`), /הוצאות \(הוצאה אחת · .*120\.5/);
+    await shot('20-expense-panel');
+    await clickButton('שמירה');
+    await sleep(300);
+    const st = await mockState();
+    assert.match(st.commits.at(-1).message, /expenses \+1/);
+    assert.equal(st.doc.expenses.at(-1).title, 'מסך 4.3 אינץ׳');
+    assert.equal(st.doc.expenses.at(-1).created.by, 'p1');
+    await closePanel();
+    await evaluate(`document.querySelector('[role=tablist] button:nth-child(5)').click()`);
+    await sleep(150);
+    await clickButton('+ הוצאה חדשה');
+    await sleep(100);
+    const id2 = await app(`a.state.doc.expenses.at(-1).id`);
+    await setField(`exp-${id2}-title`, 'מחבר CAN');
+    await setField(`exp-${id2}-amount`, '40');
+    await setField(`exp-${id2}-status`, 'planned');
+    await setField(`exp-${id2}-paidBy`, 'p2');
+    await setField('exp-budget', '1000');
+    const page = await evaluate(`document.querySelector('.page').innerText`);
+    assert.match(page, /שולם: .*120\.5/);
+    assert.match(page, /מתוכנן: .*40/);
+    assert.match(page, /ממתין להחזר: .*120\.5/);
+    assert.match(page, /נשאר: .*839\.5/);
+    assert.match(page, /רכיבים: .*120\.5/);
+    assert.match(page, /Alex: .*120\.5/);
+    assert.match(page, /2 הוצאות/);
+    await shot('21-expenses-page');
+    await evaluate(`[...document.querySelectorAll('.log-tools select')][1].value = 'planned'; [...document.querySelectorAll('.log-tools select')][1].dispatchEvent(new Event('change'))`);
+    await sleep(100);
+    assert.equal(await evaluate(`document.querySelectorAll('.page .expense').length`), 1, 'the status filter shows only planned');
+    await evaluate(`[...document.querySelectorAll('.log-tools select')][1].value = ''; [...document.querySelectorAll('.log-tools select')][1].dispatchEvent(new Event('change'))`);
+    await sleep(100);
+    await evaluate(`document.querySelector('[role=tablist] button:nth-child(1)').click()`);
+    await sleep(100);
+  });
+
   await step('a finished task keeps the start, duration and end you give it', async () => {
     const span = async () => app(`(() => { const r = a.state.sched.rows.get('T002'); return { start: r.start, end: r.end, days: r.end - r.start + 1 }; })()`);
     const r = await barRect('T002');
@@ -633,6 +691,12 @@ try {
     }
     assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true);
     await shot('10-phone-tools');
+    await evaluate(`document.querySelector('[role=tablist] button:nth-child(5)').click()`);
+    await sleep(150);
+    assert.equal(await evaluate(`document.documentElement.scrollWidth <= innerWidth`), true, 'the expenses page fits a phone');
+    await shot('10-phone-expenses');
+    await evaluate(`document.querySelector('[role=tablist] button:nth-child(1)').click()`);
+    await sleep(100);
     await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   });
 

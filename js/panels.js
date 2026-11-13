@@ -9,6 +9,7 @@ import {
   addDays, durationForEnd, endFor, isMilestone, toDay, toIso, wouldCreateCycle,
 } from './model.js';
 import { taskName } from './mspdi.js';
+import { renderTaskExpenses } from './expenses.js';
 import { renderTaskLog } from './worklog.js';
 
 const STATUS = [['todo', 'לא התחיל'], ['doing', 'בעבודה'], ['blocked', 'חסום'], ['done', 'הושלם']];
@@ -297,6 +298,7 @@ export function renderTaskDrawer() {
       onchange: (e) => update(t.id, (x) => { x.note = e.target.value || undefined; }),
     })),
     renderTaskLog(t),
+    renderTaskExpenses(t),
     field('שם באנגלית (לדו"חות)', textInput('nameEn', t.nameEn, (v) => update(t.id, (x) => { x.nameEn = v || undefined; }), { dir: 'ltr' })),
     h('div', { class: 'f' },
       h('h3', {}, 'GitHub Issue'),

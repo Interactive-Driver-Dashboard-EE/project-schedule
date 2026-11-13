@@ -242,7 +242,7 @@ export function weekSummary(doc, sched, todayIso) {
 
 // Three-way merge keyed by id, so two partners editing different tasks both
 // keep their work. When both changed the same record, `mine` wins and it is reported.
-const KEYED = ['tasks', 'phases', 'blackouts', 'baselines', 'people', 'log'];
+const KEYED = ['tasks', 'phases', 'blackouts', 'baselines', 'people', 'log', 'expenses'];
 
 export function mergeDocs(base, mine, theirs) {
   const merged = structuredClone(theirs);
@@ -279,9 +279,9 @@ export function mergeDocs(base, mine, theirs) {
   return { merged, conflicts };
 }
 
-// Records who added each task and log entry, and who changed it last. Only the
-// latest change is kept, so the file does not grow with every edit.
-const STAMPED = ['tasks', 'log'];
+// Records who added each task, log entry and expense, and who changed it last.
+// Only the latest change is kept, so the file does not grow with every edit.
+const STAMPED = ['tasks', 'log', 'expenses'];
 
 function contentOf(record) {
   const { created, updated, ...rest } = record;
@@ -356,6 +356,30 @@ export function newTaskId(doc) {
     if (m) max = Math.max(max, Number(m[1]));
   }
   return `T${String(max + 1).padStart(3, '0')}`;
+}
+
+// Totals for a list of expenses, per currency, since amounts in different
+// currencies are never added together. "Spent" is paid or reimbursed; "owed"
+// is what someone paid out of pocket and has not had back yet.
+export function expenseSummary(list) {
+  const out = {};
+  for (const e of list) {
+    const n = Number(e.amount);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    const c = e.currency || 'ILS';
+    const row = out[c] ||= { spent: 0, planned: 0, owed: 0, byCategory: {}, byPayer: {} };
+    if (e.status === 'planned') { row.planned += n; continue; }
+    row.spent += n;
+    if (e.status !== 'reimbursed' && e.paidBy && e.paidBy !== 'dept') row.owed += n;
+    const cat = e.category || 'other';
+    row.byCategory[cat] = (row.byCategory[cat] || 0) + n;
+    const who = e.paidBy || 'both';
+    row.byPayer[who] = (row.byPayer[who] || 0) + n;
+  }
+  for (const row of Object.values(out)) {
+    for (const k of ['spent', 'planned', 'owed']) row[k] = Math.round(row[k] * 100) / 100;
+  }
+  return out;
 }
 
 export function validateDoc(doc) {

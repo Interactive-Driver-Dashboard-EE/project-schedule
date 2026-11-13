@@ -9,6 +9,7 @@ import {
 } from './model.js';
 import { phaseName, taskName, toMspdi } from './mspdi.js';
 import { openShortcuts, renderSettings, renderTaskDrawer } from './panels.js';
+import { renderExpensesPage } from './expenses.js';
 import { renderLogPage } from './worklog.js';
 
 const ZOOMS = { week: 14, month: 6, all: 2 };
@@ -27,6 +28,7 @@ function loadPrefs() {
   const defaults = {
     zoom: 'all', layout: 'heading', lang: 'he', showDeps: true, showBaseline: false, theme: 'auto', collapsed: [], owner: '', track: '', query: '', tab: 'gantt',
     logWho: '', logTask: '', logQuery: '',
+    expCategory: '', expWho: '', expStatus: '', expQuery: '',
   };
   try { return { ...defaults, ...JSON.parse(storage.get(PREFS_KEY) || '{}') }; } catch { return defaults; }
 }
@@ -206,13 +208,15 @@ function describeChange(baseText, doc) {
   if (changed.length) parts.push(`updated ${changed.slice(0, 6).join(', ')}${changed.length > 6 ? ` +${changed.length - 6}` : ''}`);
   if (added.length) parts.push(`added ${added.join(', ')}`);
   if (removed.length) parts.push(`removed ${removed.join(', ')}`);
-  const logBefore = new Map((base.log || []).map((x) => [x.id, JSON.stringify(x)]));
-  const logAfter = new Set((doc.log || []).map((x) => x.id));
-  const logNew = (doc.log || []).filter((x) => !logBefore.has(x.id)).length;
-  const logEdited = (doc.log || []).filter((x) => logBefore.has(x.id) && logBefore.get(x.id) !== JSON.stringify(x)).length;
-  const logGone = [...logBefore.keys()].filter((id) => !logAfter.has(id)).length;
-  if (logNew || logEdited || logGone) {
-    parts.push(`log ${[logNew && `+${logNew}`, logEdited && `~${logEdited}`, logGone && `-${logGone}`].filter(Boolean).join(' ')}`);
+  for (const key of ['log', 'expenses']) {
+    const was = new Map((base[key] || []).map((x) => [x.id, JSON.stringify(x)]));
+    const now = new Set((doc[key] || []).map((x) => x.id));
+    const added = (doc[key] || []).filter((x) => !was.has(x.id)).length;
+    const edited = (doc[key] || []).filter((x) => was.has(x.id) && was.get(x.id) !== JSON.stringify(x)).length;
+    const gone = [...was.keys()].filter((id) => !now.has(id)).length;
+    if (added || edited || gone) {
+      parts.push(`${key} ${[added && `+${added}`, edited && `~${edited}`, gone && `-${gone}`].filter(Boolean).join(' ')}`);
+    }
   }
   return `Schedule: ${parts.join('; ') || 'settings'}`;
 }
@@ -471,7 +475,7 @@ function renderToolbar() {
   nodes.saveBtn = h('button', { class: 'btn', onclick: saveNow }, 'שמירה');
   const owners = [['', 'כולם'], ['both', 'שניהם'], ...(state.doc.people || []).map((x) => [x.id, x.name])];
   return h('div', { class: 'toolbar' },
-    h('div', { class: 'tabs', role: 'tablist' }, tab('gantt', 'גאנט'), tab('week', 'השבוע'), tab('issues', `בעיות ובדיקות (${state.issues.length})`), tab('log', 'יומן')),
+    h('div', { class: 'tabs', role: 'tablist' }, tab('gantt', 'גאנט'), tab('week', 'השבוע'), tab('issues', `בעיות ובדיקות (${state.issues.length})`), tab('log', 'יומן'), tab('expenses', 'הוצאות')),
     h('button', { class: 'btn primary', onclick: () => addTask() }, '+ משימה'),
     // On a phone the rest of the toolbar folds behind this button. On a wider
     // screen the button is hidden and everything shows as before.
@@ -1117,10 +1121,13 @@ export function deleteTask(id) {
   if (!t) return;
   const dependents = state.doc.tasks.filter((x) => (x.deps || []).some((d) => d.id === id));
   const notes = (state.doc.log || []).filter((e) => e.task === id).length;
+  const costs = (state.doc.expenses || []).filter((e) => e.task === id).length;
   const warn = [
     dependents.length ? `${dependents.length} משימות תלויות בה, והתלות תוסר.` : '',
     notes === 1 ? 'יש לה רישום אחד ביומן. הוא יישאר ביומן כרישום כללי.' : '',
     notes > 1 ? `יש לה ${notes} רישומים ביומן. הם יישארו ביומן כרישומים כלליים.` : '',
+    costs === 1 ? 'יש לה הוצאה אחת. היא תישאר ברשימת ההוצאות כהוצאה כללית.' : '',
+    costs > 1 ? `יש לה ${costs} הוצאות. הן יישארו ברשימת ההוצאות כהוצאות כלליות.` : '',
   ].filter(Boolean).map((line) => `\n${line}`).join('');
   if (!confirm(`למחוק את "${t.name}"?${warn}`)) return;
   if (state.selected === id) {
@@ -1130,7 +1137,7 @@ export function deleteTask(id) {
   commit((doc) => {
     doc.tasks = doc.tasks.filter((x) => x.id !== id);
     for (const x of doc.tasks) if (x.deps) x.deps = x.deps.filter((d) => d.id !== id);
-    for (const e of doc.log || []) {
+    for (const e of [...(doc.log || []), ...(doc.expenses || [])]) {
       if (e.task !== id) continue;
       delete e.task;
       e.taskName = t.name;
@@ -1312,6 +1319,7 @@ function render() {
   if (tab === 'week') main.append(renderWeekPage());
   else if (tab === 'issues') main.append(renderIssuesPage());
   else if (tab === 'log') main.append(renderLogPage());
+  else if (tab === 'expenses') main.append(renderExpensesPage());
   else {
     nodes.scroller = h('div', { class: 'scroller' }, renderGantt());
     main.append(nodes.scroller);
